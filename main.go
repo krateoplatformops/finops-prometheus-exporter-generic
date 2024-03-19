@@ -29,11 +29,6 @@ type Config struct {
 	AdditionalVariables   map[string]string `yaml:"additionalVariables" json:"additionalVariables"`
 }
 
-type ScraperDatabaseConfigRef struct {
-	Name      string `yaml:"name" json:"name"`
-	Namespace string `yaml:"namespace" json:"namespace"`
-}
-
 type recordGaugeCombo struct {
 	record []string
 	gauge  prometheus.Gauge
@@ -90,11 +85,11 @@ func trapBOM(file []byte) []byte {
 }
 
 /*
-* This function makes the API request to read the FOCUS csv file according to the given configuration.
+* This function makes the API request to download the FOCUS csv file according to the given configuration.
 * @param targetAPI the configuration for the API request
-* @return the csv file as a 2D array of strings
+* @return the name of the saved file
  */
-func makeAPIRequest(config Config) [][]string {
+func makeAPIRequest(config Config) string {
 	requestURL := fmt.Sprintf(config.URL)
 	request, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	fatal(err)
@@ -117,7 +112,16 @@ func makeAPIRequest(config Config) [][]string {
 	err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Name), trapBOM(data), 0644)
 	fatal(err)
 
-	file, err := os.Open(fmt.Sprintf("/temp/%s.dat", config.Name))
+	return config.Name
+}
+
+/*
+* This function reads the given csv file and returns the record list.
+* @param fileName the name of the FOCUS csv file
+* @return csv file as a 2D array of strings
+ */
+func getRecordsFromFile(fileName string) [][]string {
+	file, err := os.Open(fmt.Sprintf("/temp/%s.dat", fileName))
 	fatal(err)
 
 	defer file.Close()
@@ -150,9 +154,13 @@ func getBilledCostIndex(records [][]string) (int, error) {
 * @param registry the prometheus registry to add the gauges to
 * @param prometheusMetrics the array of structs that contain gauges and the record the gauge was created from (to check when there are new records if it has already been created)
  */
-func updatedMetrics(config Config, registry *prometheus.Registry, prometheusMetrics []recordGaugeCombo) {
+func updatedMetrics(config Config, useConfig bool, registry *prometheus.Registry, prometheusMetrics []recordGaugeCombo) {
 	for {
-		records := makeAPIRequest(config)
+		fileName := config.Name
+		if useConfig {
+			fileName = makeAPIRequest(config)
+		}
+		records := getRecordsFromFile(fileName)
 		billedCostIndex, err := getBilledCostIndex(records)
 		if err != nil {
 			fmt.Println(err)
@@ -189,7 +197,7 @@ func updatedMetrics(config Config, registry *prometheus.Registry, prometheusMetr
 				}
 
 				newMetricsRow := promauto.NewGauge(prometheus.GaugeOpts{
-					Name:        fmt.Sprintf("billed_cost_%s_%d", config.Name, i),
+					Name:        fmt.Sprintf("billed_cost_%s_%d", strings.ReplaceAll(config.Name, "-", "_"), i),
 					ConstLabels: labels,
 				})
 				metricValue, err := strconv.ParseFloat(records[i][billedCostIndex], 64)
@@ -204,12 +212,21 @@ func updatedMetrics(config Config, registry *prometheus.Registry, prometheusMetr
 }
 
 func main() {
-	config, err := ParseConfigFile("/config/config.yaml")
-	fatal(err)
+	var err error
+	config := Config{}
+	useConfig := true
+	if len(os.Args) <= 1 {
+		config, err = ParseConfigFile("/config/config.yaml")
+		fatal(err)
+	} else {
+		useConfig = false
+		config.Name = os.Args[1]
+		config.PollingIntervalHours = 1
+	}
 
 	registry := prometheus.NewRegistry()
 
-	go updatedMetrics(config, registry, []recordGaugeCombo{})
+	go updatedMetrics(config, useConfig, registry, []recordGaugeCombo{})
 
 	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 
