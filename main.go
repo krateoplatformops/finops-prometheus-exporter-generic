@@ -237,7 +237,8 @@ func updatedMetrics(config config.Config, useConfig bool, registry *prometheus.R
 					if !strings.Contains(records[0][j], "Tags") {
 						labels[records[0][j]] = value
 					} else {
-						labels[records[0][j]] = ""
+						replacer := strings.NewReplacer("{", "", "}", "", "=", ":", ",", ";", "\"", "")
+						labels[records[0][j]] = replacer.Replace(value)
 					}
 				}
 

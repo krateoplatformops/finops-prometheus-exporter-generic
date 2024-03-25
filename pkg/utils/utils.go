@@ -3,10 +3,13 @@ package utils
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"prometheus-exporter-generic/pkg/config"
 
@@ -15,7 +18,12 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-var ResourceIds []string
+var (
+	ResourceIds []string
+	metricName  = url.QueryEscape("Percentage CPU")
+	timespan    = "month"
+	interval    = "PT15M"
+)
 
 func StartNewExporters(config config.Config) error {
 	namespace := os.Getenv("NAMESPACE")
@@ -52,7 +60,7 @@ func StartNewExporters(config config.Config) error {
 		// If the URL contains "azure", auto complete with additional (temporary) information
 		switch {
 		case strings.Contains(config.Name, "azure"):
-			url += "/providers/microsoft.insights/metrics?api-version=2023-10-01&metricnames=Percentage%20CPU&timespan=2024-01-01T00:00:00Z/2024-03-01T00:00:00Z"
+			url += fmt.Sprintf("/providers/microsoft.insights/metrics?api-version=2023-10-01&metricnames=%s&timespan=%s&interval=%s", metricName, computeTimespan(timespan), interval)
 		}
 
 		// Check if the ExporterScraperConfig already exists
@@ -158,4 +166,21 @@ type ScraperConfig struct {
 type ScraperDatabaseConfigRef struct {
 	Name      string `yaml:"name" json:"name"`
 	Namespace string `yaml:"namespace" json:"namespace"`
+}
+
+func computeTimespan(timespanName string) string {
+	dateFormat := "yyyy-mm-dd"
+	switch timespanName {
+	case "day":
+		interval = "PT5M"
+		return time.Now().Format(dateFormat) + "/" + time.Now().AddDate(0, 0, -1).Format(dateFormat)
+	case "month":
+		interval = "PT15M"
+		return time.Now().Format(dateFormat) + "/" + time.Now().AddDate(0, -1, 0).Format(dateFormat)
+	case "year":
+		interval = "PT6H"
+		return time.Now().Format(dateFormat) + "/" + time.Now().AddDate(-1, 0, 0).Format(dateFormat)
+	}
+	interval = "PT15M"
+	return time.Now().Format(dateFormat) + "/" + time.Now().AddDate(0, -1, 0).Format(dateFormat)
 }
