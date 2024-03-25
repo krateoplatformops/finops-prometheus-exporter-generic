@@ -4,5 +4,7 @@ requireAuthentication: #true/false
 authenticationMethod: #one of: bearer-token
 pollingIntervalHours: #int
 additionalVariables:
-  # Variables that contain only uppercase letters are taken from environment variables
   varName: sample
+  # Variables whose value only contains uppercase letters are taken from environment variables
+  # FROM_THE_ENVIRONMENT must be the name of an environment variable inside the target exporter container
+  envExample: FROM_THE_ENVIRONMENT
