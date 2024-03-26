@@ -37,4 +37,6 @@ COPY --from=builder /bin/prometheus-exporter-generic /bin/prometheus-exporter-ge
 
 USER nonroot:nonroot
 
+WORKDIR /temp
+
 ENTRYPOINT ["/bin/prometheus-exporter-generic"]
