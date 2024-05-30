@@ -1,7 +1,7 @@
 name: #name of the exporter
 url: #url including http/https of the CSV-based API to export, parts with <varName> are taken from additionalVariables: http://<varName> -> http://sample 
 requireAuthentication: #true/false
-authenticationMethod: #one of: bearer-token
+authenticationMethod: #one of: bearer-token, cert-file
 pollingIntervalHours: #int
 additionalVariables:
   varName: sample
