@@ -1,10 +1,13 @@
 package utils
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,7 +16,9 @@ import (
 	configPackage "github.com/krateoplatformops/finops-prometheus-exporter-generic/pkg/config"
 
 	operatorPackage "github.com/krateoplatformops/finops-operator-exporter/api/v1"
+	operatorPackageFocus "github.com/krateoplatformops/finops-operator-focus/api/v1"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -138,4 +143,102 @@ func computeTimespan(timespanName string) string {
 	}
 	interval = "PT15M"
 	return time.Now().Format(dateFormat) + "/" + time.Now().AddDate(0, -1, 0).Format(dateFormat)
+}
+
+/*
+* Function to remove the encoding bytes from a file.
+* @param file The file to remove the encoding from.
+ */
+func TrapBOM(file []byte) []byte {
+	return bytes.Trim(file, "\xef\xbb\xbf")
+}
+
+func TryParseResponseAsFocusJSON(jsonData []byte) ([]byte, error) {
+	var focusConfigList operatorPackageFocus.FocusConfigList
+	err := json.Unmarshal(jsonData, &focusConfigList)
+	if err != nil {
+		fmt.Println("Parsing failed:", err)
+		fmt.Println(string(jsonData))
+		return []byte{}, err
+	}
+
+	outputStr := GetOutputStr(focusConfigList)
+
+	return []byte(outputStr), nil
+}
+
+func GetOutputStr(configList operatorPackageFocus.FocusConfigList) string {
+	outputStr := ""
+	for i, config := range configList.Items {
+		v := reflect.ValueOf(config.Spec.FocusSpec)
+
+		if i == 0 {
+			for i := 0; i < v.NumField(); i++ {
+				outputStr += v.Type().Field(i).Name + ","
+			}
+			outputStr = strings.TrimSuffix(outputStr, ",") + "\n"
+		}
+
+		for i := 0; i < v.NumField(); i++ {
+			outputStr += GetStringValue(v.Field(i).Interface()) + ","
+		}
+		outputStr = strings.TrimSuffix(outputStr, ",") + "\n"
+	}
+	outputStr = strings.TrimSuffix(outputStr, "\n")
+	fmt.Println(outputStr)
+	return outputStr
+}
+
+func GetStringValue(value any) string {
+
+	str, ok := value.(string)
+	if ok {
+		return str
+	}
+
+	integer, ok := value.(int)
+	if ok {
+		return strconv.FormatInt(int64(integer), 10)
+	}
+
+	integer64, ok := value.(int64)
+	if ok {
+		return strconv.FormatInt(integer64, 10)
+	}
+
+	resourceQuantity, ok := value.(resource.Quantity)
+	if ok {
+		return resourceQuantity.AsDec().String()
+	}
+
+	metav1Time, ok := value.(metav1.Time)
+	if ok {
+		return metav1Time.Format(time.RFC3339)
+	}
+
+	tags, ok := value.([]operatorPackageFocus.TagsType)
+	if ok {
+		res := ""
+		for _, tag := range tags {
+			res += tag.Key + "=" + tag.Value + ";"
+		}
+		return strings.TrimSuffix(res, ";")
+	}
+
+	return ""
+}
+
+/*
+* Given the records from the csv file, it returns the index of the "toFind" column.
+* @param records The csv file as a 2D array of strings
+* @param toFind the column to find
+* @return the index of the "toFind" column
+ */
+func GetIndexOf(records [][]string, toFind string) (int, error) {
+	for i, value := range records[0] {
+		if value == toFind {
+			return i, nil
+		}
+	}
+	return -1, errors.New(toFind + " not found")
 }

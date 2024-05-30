@@ -1,10 +1,9 @@
 package main
 
 import (
-	"bytes"
+	"crypto/tls"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -72,37 +71,39 @@ func ParseConfigFile(file string) (operatorPackage.ExporterScraperConfig, error)
 }
 
 /*
-* Function to remove the encoding bytes from a file.
-* @param file The file to remove the encoding from.
- */
-func trapBOM(file []byte) []byte {
-	return bytes.Trim(file, "\xef\xbb\xbf")
-}
-
-/*
 * This function makes the API request to download the FOCUS csv file according to the given configuration.
 * @param targetAPI the configuration for the API request
 * @return the name of the saved file
  */
 func makeAPIRequest(config operatorPackage.ExporterScraperConfig) string {
 	requestURL := fmt.Sprintf(config.Spec.ExporterConfig.UrlParsed)
+	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	request, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	fatal(err)
+
+	fmt.Println(requestURL)
 
 	if config.Spec.ExporterConfig.RequireAuthentication {
 		switch config.Spec.ExporterConfig.AuthenticationMethod {
 		case "bearer-token":
-			request.Header.Set("Authorization", config.Spec.ExporterConfig.AdditionalVariables["authenticationToken"])
+			request.Header.Set("Authorization", "Bearer "+config.Spec.ExporterConfig.AdditionalVariables["authenticationToken"])
+		case "cert-file":
+			data, err := os.ReadFile(config.Spec.ExporterConfig.AdditionalVariables["certFilePath"])
+			if err != nil {
+				fmt.Println("There has been an error reading the cert-file")
+				return ""
+			}
+			request.Header.Set("Authorization", "Bearer "+string(data))
 		}
 	}
 
-	res, err := http.Get(requestURL)
+	res, err := http.DefaultClient.Do(request)
 	fatal(err)
 
 	defer res.Body.Close()
 
 	if res.StatusCode == 400 {
-		res, err = http.Get(requestURL)
+		res, err = http.DefaultClient.Do(request)
 		fatal(err)
 	}
 
@@ -123,8 +124,15 @@ func makeAPIRequest(config operatorPackage.ExporterScraperConfig) string {
 	data, err := io.ReadAll(res.Body)
 	fatal(err)
 
-	err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Name), trapBOM(data), 0644)
-	fatal(err)
+	fmt.Println("Trying to parse data as JSON")
+	jsonDataParsed, err := utils.TryParseResponseAsFocusJSON(utils.TrapBOM(data))
+	if err != nil {
+		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Name), data, 0644)
+		fatal(err)
+	} else {
+		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Name), jsonDataParsed, 0644)
+		fatal(err)
+	}
 
 	return config.Spec.ExporterConfig.Name
 }
@@ -149,21 +157,6 @@ func getRecordsFromFile(fileName string) [][]string {
 }
 
 /*
-* Given the records from the csv file, it returns the index of the "toFind" column.
-* @param records The csv file as a 2D array of strings
-* @param toFind the column to find
-* @return the index of the "toFind" column
- */
-func getIndexOf(records [][]string, toFind string) (int, error) {
-	for i, value := range records[0] {
-		if value == toFind {
-			return i, nil
-		}
-	}
-	return -1, errors.New(toFind + " not found")
-}
-
-/*
 * This function creates and maintains the prometheus gauges. Periodically, it updates the records csv file and checks if there are new rows to add to the registry.
 * @param targetAPI the configuration for the API request
 * @param registry the prometheus registry to add the gauges to
@@ -180,17 +173,17 @@ func updatedMetrics(config operatorPackage.ExporterScraperConfig, useConfig bool
 		// Obtain various indexes
 		// BilledCost for value of metric
 		// SerivceName and ResourceType to check if additional exporters need to be started
-		billedCostIndex, err := getIndexOf(records, "BilledCost")
+		billedCostIndex, err := utils.GetIndexOf(records, "BilledCost")
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		serviceNameIndex, err := getIndexOf(records, "ServiceName")
+		serviceNameIndex, err := utils.GetIndexOf(records, "ServiceName")
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		resourceTypeIndex, err := getIndexOf(records, "ResourceType")
+		resourceTypeIndex, err := utils.GetIndexOf(records, "ResourceType")
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -204,7 +197,7 @@ func updatedMetrics(config operatorPackage.ExporterScraperConfig, useConfig bool
 			}
 
 			if record[serviceNameIndex] == "Virtual Machines" && record[resourceTypeIndex] == "Virtual machine" {
-				resourceIdIndex, err := getIndexOf(records, "ResourceId")
+				resourceIdIndex, err := utils.GetIndexOf(records, "ResourceId")
 				if err != nil {
 					fmt.Println(err)
 					continue
@@ -290,5 +283,6 @@ func main() {
 func fatal(err error) {
 	if err != nil {
 		log.Fatalln(err)
+		fmt.Println(err)
 	}
 }
