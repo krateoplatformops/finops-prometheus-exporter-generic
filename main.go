@@ -127,14 +127,14 @@ func makeAPIRequest(config operatorPackage.ExporterScraperConfig) string {
 	fmt.Println("Trying to parse data as JSON")
 	jsonDataParsed, err := utils.TryParseResponseAsFocusJSON(utils.TrapBOM(data))
 	if err != nil {
-		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Name), data, 0644)
+		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Provider.Name), utils.TrapBOM(data), 0644)
 		fatal(err)
 	} else {
-		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Name), jsonDataParsed, 0644)
+		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Provider.Name), jsonDataParsed, 0644)
 		fatal(err)
 	}
 
-	return config.Spec.ExporterConfig.Name
+	return config.Spec.ExporterConfig.Provider.Name
 }
 
 /*
@@ -164,21 +164,26 @@ func getRecordsFromFile(fileName string) [][]string {
  */
 func updatedMetrics(config operatorPackage.ExporterScraperConfig, useConfig bool, registry *prometheus.Registry, prometheusMetrics []recordGaugeCombo) {
 	for {
-		fileName := config.Spec.ExporterConfig.Name
+		fileName := config.Spec.ExporterConfig.Provider.Name
 		if useConfig {
 			fileName = makeAPIRequest(config)
 		}
 		records := getRecordsFromFile(fileName)
 
+		resourceTypes := []string{}
+		if config.Spec.ExporterConfig.Provider.Name != "" {
+			var err error
+			resourceTypes, err = utils.InitializeResourcesWithProvider(config)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+		}
+
 		// Obtain various indexes
 		// BilledCost for value of metric
 		// SerivceName and ResourceType to check if additional exporters need to be started
 		billedCostIndex, err := utils.GetIndexOf(records, "BilledCost")
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		serviceNameIndex, err := utils.GetIndexOf(records, "ServiceName")
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -196,20 +201,22 @@ func updatedMetrics(config operatorPackage.ExporterScraperConfig, useConfig bool
 				continue
 			}
 
-			if record[serviceNameIndex] == "Virtual Machines" && record[resourceTypeIndex] == "Virtual machine" {
-				resourceIdIndex, err := utils.GetIndexOf(records, "ResourceId")
-				if err != nil {
-					fmt.Println(err)
-					continue
-				}
-				found := false
-				for _, elem := range utils.ResourceIds {
-					if strings.EqualFold(record[resourceIdIndex], elem) {
-						found = true
+			for _, resourceName := range resourceTypes {
+				if record[resourceTypeIndex] == resourceName {
+					resourceIdIndex, err := utils.GetIndexOf(records, "ResourceId")
+					if err != nil {
+						fmt.Println(err)
+						continue
 					}
-				}
-				if !found {
-					utils.ResourceIds = append(utils.ResourceIds, record[resourceIdIndex])
+					found := false
+					for _, elem := range utils.ResourceIdTypeComboList {
+						if strings.EqualFold(record[resourceIdIndex], elem.ResourceId) {
+							found = true
+						}
+					}
+					if !found {
+						utils.ResourceIdTypeComboList = append(utils.ResourceIdTypeComboList, utils.ResourceIdTypeCombo{ResourceId: record[resourceIdIndex], ResourceType: resourceName})
+					}
 				}
 			}
 
@@ -238,7 +245,7 @@ func updatedMetrics(config operatorPackage.ExporterScraperConfig, useConfig bool
 				}
 
 				newMetricsRow := promauto.NewGauge(prometheus.GaugeOpts{
-					Name:        fmt.Sprintf("billed_cost_%s_%d", strings.ReplaceAll(config.Spec.ExporterConfig.Name, "-", "_"), i),
+					Name:        fmt.Sprintf("billed_cost_%s_%d", strings.ReplaceAll(config.Spec.ExporterConfig.Provider.Name, "-", "_"), i),
 					ConstLabels: labels,
 				})
 				metricValue, err := strconv.ParseFloat(records[i][billedCostIndex], 64)
@@ -266,7 +273,7 @@ func main() {
 		fatal(err)
 	} else {
 		useConfig = false
-		config.Spec.ExporterConfig.Name = os.Args[1]
+		config.Spec.ExporterConfig.Provider.Name = os.Args[1]
 		config.Spec.ExporterConfig.PollingIntervalHours = 1
 	}
 
