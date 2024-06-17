@@ -164,6 +164,7 @@ func getRecordsFromFile(fileName string) [][]string {
  */
 func updatedMetrics(config operatorPackage.ExporterScraperConfig, useConfig bool, registry *prometheus.Registry, prometheusMetrics []recordGaugeCombo) {
 	for {
+		attemptResourceExportersInThisIteration := true
 		fileName := config.Spec.ExporterConfig.Provider.Name
 		if useConfig {
 			fileName = makeAPIRequest(config)
@@ -176,7 +177,7 @@ func updatedMetrics(config operatorPackage.ExporterScraperConfig, useConfig bool
 			resourceTypes, err = utils.InitializeResourcesWithProvider(config)
 			if err != nil {
 				fmt.Println(err)
-				continue
+				attemptResourceExportersInThisIteration = false
 			}
 		}
 
@@ -200,22 +201,23 @@ func updatedMetrics(config operatorPackage.ExporterScraperConfig, useConfig bool
 			if i == 0 {
 				continue
 			}
-
-			for _, resourceName := range resourceTypes {
-				if record[resourceTypeIndex] == resourceName {
-					resourceIdIndex, err := utils.GetIndexOf(records, "ResourceId")
-					if err != nil {
-						fmt.Println(err)
-						continue
-					}
-					found := false
-					for _, elem := range utils.ResourceIdTypeComboList {
-						if strings.EqualFold(record[resourceIdIndex], elem.ResourceId) {
-							found = true
+			if attemptResourceExportersInThisIteration {
+				for _, resourceName := range resourceTypes {
+					if record[resourceTypeIndex] == resourceName {
+						resourceIdIndex, err := utils.GetIndexOf(records, "ResourceId")
+						if err != nil {
+							fmt.Println(err)
+							continue
 						}
-					}
-					if !found {
-						utils.ResourceIdTypeComboList = append(utils.ResourceIdTypeComboList, utils.ResourceIdTypeCombo{ResourceId: record[resourceIdIndex], ResourceType: resourceName})
+						found := false
+						for _, elem := range utils.ResourceIdTypeComboList {
+							if strings.EqualFold(record[resourceIdIndex], elem.ResourceId) {
+								found = true
+							}
+						}
+						if !found {
+							utils.ResourceIdTypeComboList = append(utils.ResourceIdTypeComboList, utils.ResourceIdTypeCombo{ResourceId: record[resourceIdIndex], ResourceType: resourceName})
+						}
 					}
 				}
 			}
@@ -256,9 +258,11 @@ func updatedMetrics(config operatorPackage.ExporterScraperConfig, useConfig bool
 			}
 		}
 
-		err = utils.StartNewExporters(config)
-		if err != nil {
-			fmt.Println(err)
+		if attemptResourceExportersInThisIteration {
+			err = utils.StartNewExporters(config)
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
 		time.Sleep(time.Duration(config.Spec.ExporterConfig.PollingIntervalHours) * time.Hour)
 	}
