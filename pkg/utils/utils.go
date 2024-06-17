@@ -58,6 +58,10 @@ func StartNewExporters(config operatorPackage.ExporterScraperConfig) error {
 					urlsParts := urlDomainRegex.FindAllString(config.Spec.ExporterConfig.UrlParsed, -1)
 					url := strings.Join(urlsParts, "") + resourceId
 
+					additionalVariables := config.Spec.ExporterConfig.AdditionalVariables
+					additionalVariables["ResourceId"] = resourceId
+					fmt.Println("new additional variables\n", additionalVariables)
+
 					url += fmt.Sprintf(metric.Endpoint.ResourceSuffix, urlPackage.QueryEscape(metric.MetricName), computeTimespan(metric.Timespan), metric.Interval)
 
 					// Check if the ExporterScraperConfig already exists
@@ -100,7 +104,7 @@ func StartNewExporters(config operatorPackage.ExporterScraperConfig) error {
 									RequireAuthentication: config.Spec.ExporterConfig.RequireAuthentication,
 									AuthenticationMethod:  config.Spec.ExporterConfig.AuthenticationMethod,
 									PollingIntervalHours:  config.Spec.ExporterConfig.PollingIntervalHours,
-									AdditionalVariables:   config.Spec.ExporterConfig.AdditionalVariables,
+									AdditionalVariables:   additionalVariables,
 								},
 								ScraperConfig: operatorPackage.ScraperConfig{
 									TableName:            config.Spec.ScraperConfig.TableName + "_res",
