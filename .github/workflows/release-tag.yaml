@@ -1,4 +1,4 @@
-name: release
+name: release-tag
 
 on:
   push:
@@ -106,6 +106,9 @@ jobs:
 
   merge:
     runs-on: buildjet-2vcpu-ubuntu-2204
+    permissions:
+      packages: write
+      contents: read
     needs:
       - package-amd64
       - package-arm64
