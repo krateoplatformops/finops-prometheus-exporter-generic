@@ -20,6 +20,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -351,4 +352,17 @@ func getMetricsList(clientset *kubernetes.Clientset, resource configPackage.Reso
 	}
 
 	return result, nil
+}
+
+func GetBearerTokenSecret(config operatorPackage.ExporterScraperConfig) (string, error) {
+	clientset, err := GetClientSet()
+	if err != nil {
+		return "", err
+	}
+
+	secret, err := clientset.CoreV1().Secrets(config.Spec.ExporterConfig.BearerToken.Namespace).Get(context.TODO(), config.Spec.ExporterConfig.BearerToken.Name, v1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	return string(secret.Data["bearer-token"]), nil
 }
