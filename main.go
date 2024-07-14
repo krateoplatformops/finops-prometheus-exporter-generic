@@ -86,7 +86,11 @@ func makeAPIRequest(config operatorPackage.ExporterScraperConfig) string {
 	if config.Spec.ExporterConfig.RequireAuthentication {
 		switch config.Spec.ExporterConfig.AuthenticationMethod {
 		case "bearer-token":
-			request.Header.Set("Authorization", "Bearer "+config.Spec.ExporterConfig.AdditionalVariables["authenticationToken"])
+			token, err := utils.GetBearerTokenSecret(config)
+			if err != nil {
+				fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer "+token)
 		case "cert-file":
 			data, err := os.ReadFile(config.Spec.ExporterConfig.AdditionalVariables["certFilePath"])
 			if err != nil {
