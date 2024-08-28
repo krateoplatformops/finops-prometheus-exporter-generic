@@ -1,6 +1,6 @@
 package config
 
-import operatorPackage "github.com/krateoplatformops/finops-operator-exporter/api/v1"
+import finopsDataTypes "github.com/krateoplatformops/finops-data-types/api/v1"
 
 type Kind struct {
 	Kind   string `json:"kind"`
@@ -20,12 +20,12 @@ type MetricConfig struct {
 }
 
 type ProviderConfigSpec struct {
-	ResourcesRef []operatorPackage.ObjectRef `json:"resourcesRef" yaml:"resourcesRef"`
+	ResourcesRef []finopsDataTypes.ObjectRef `json:"resourcesRef" yaml:"resourcesRef"`
 }
 
 type ResourceConfigSpec struct {
 	ResourceFocusName string                      `json:"resourceFocusName" yaml:"resourceFocusName"`
-	MetricsRef        []operatorPackage.ObjectRef `json:"metricsRef" yaml:"metricsRef"`
+	MetricsRef        []finopsDataTypes.ObjectRef `json:"metricsRef" yaml:"metricsRef"`
 }
 
 type MetricConfigSpec struct {
