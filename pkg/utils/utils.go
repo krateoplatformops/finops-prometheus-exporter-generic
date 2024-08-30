@@ -104,6 +104,7 @@ func StartNewExporters(config finopsDataTypes.ExporterScraperConfig) error {
 									MetricType:            "resource",
 									RequireAuthentication: config.Spec.ExporterConfig.RequireAuthentication,
 									AuthenticationMethod:  config.Spec.ExporterConfig.AuthenticationMethod,
+									BearerToken:           config.Spec.ExporterConfig.BearerToken,
 									PollingIntervalHours:  config.Spec.ExporterConfig.PollingIntervalHours,
 									AdditionalVariables:   additionalVariables,
 								},
