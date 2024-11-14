@@ -365,5 +365,5 @@ func GetBearerTokenSecret(config finopsDataTypes.ExporterScraperConfig) (string,
 	if err != nil {
 		return "", err
 	}
-	return string(secret.Data["bearer-token"]), nil
+	return string(secret.Data[config.Spec.ExporterConfig.BearerToken.Key]), nil
 }
