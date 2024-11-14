@@ -109,6 +109,7 @@ func StartNewExporters(config finopsDataTypes.ExporterScraperConfig) error {
 									AdditionalVariables:   additionalVariables,
 								},
 								ScraperConfig: finopsDataTypes.ScraperConfigSpec{
+									MetricType:           "resource",
 									TableName:            config.Spec.ScraperConfig.TableName + "_res",
 									PollingIntervalHours: config.Spec.ScraperConfig.PollingIntervalHours,
 									ScraperDatabaseConfigRef: finopsDataTypes.ObjectRef{
