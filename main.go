@@ -135,7 +135,10 @@ func makeAPIRequest(config finopsDataTypes.ExporterScraperConfig) string {
 		fatal(err)
 	} else {
 		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Provider.Name), jsonDataParsed, 0644)
-		fatal(err)
+		if err != nil {
+			fatal(err)
+		}
+
 	}
 
 	return config.Spec.ExporterConfig.Provider.Name

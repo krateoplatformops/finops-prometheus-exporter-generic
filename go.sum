@@ -52,6 +52,8 @@ github.com/krateoplatformops/finops-data-types v0.0.0-20240828100912-eda8875205c
 github.com/krateoplatformops/finops-data-types v0.0.0-20240828100912-eda8875205cd/go.mod h1:sBjqLz0E1UCBP5Jnz6i1c9almnmgaf3eZ8Q+fANKzs4=
 github.com/krateoplatformops/finops-data-types v0.0.0-20240830093537-a6444bf93807 h1:VzI8xExvYv9XLFgexcAvoFwE5pzyDa6a9AE6EYy/ESM=
 github.com/krateoplatformops/finops-data-types v0.0.0-20240830093537-a6444bf93807/go.mod h1:sBjqLz0E1UCBP5Jnz6i1c9almnmgaf3eZ8Q+fANKzs4=
+github.com/krateoplatformops/finops-data-types v0.0.0-20241114103324-d1c2aec150da h1:JbW9RC2eN7oTddgVdCqUI+nhgqbdpwZMQXVQXHvHY2w=
+github.com/krateoplatformops/finops-data-types v0.0.0-20241114103324-d1c2aec150da/go.mod h1:sBjqLz0E1UCBP5Jnz6i1c9almnmgaf3eZ8Q+fANKzs4=
 github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/mailru/easyjson v0.7.7 h1:UGYAvKxe3sBsEDzO8ZeWOSlIQfWFlxbzLZe7hwFURr0=
