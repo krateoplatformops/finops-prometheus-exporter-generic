@@ -169,7 +169,7 @@ func getRecordsFromFile(fileName string) [][]string {
 * @param registry the prometheus registry to add the gauges to
 * @param prometheusMetrics the array of structs that contain gauges and the record the gauge was created from (to check when there are new records if it has already been created)
  */
-func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool, registry *prometheus.Registry, prometheusMetrics []recordGaugeCombo) {
+func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool, registry *prometheus.Registry, prometheusMetrics map[string]recordGaugeCombo) {
 	for {
 		attemptResourceExportersInThisIteration := true
 		fileName := config.Spec.ExporterConfig.Provider.Name
@@ -230,14 +230,12 @@ func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool
 			}
 
 			notFound = true
-			for _, metric := range prometheusMetrics {
+			if _, ok := prometheusMetrics[strings.Join(record, " ")]; ok {
+				metricValue, err := strconv.ParseFloat(record[billedCostIndex], 64)
+				fatal(err)
+				prometheusMetrics[strings.Join(record, " ")].gauge.Set(metricValue)
+				notFound = false
 
-				if strings.Join(metric.record, " ") == strings.Join(record, " ") {
-					metricValue, err := strconv.ParseFloat(record[billedCostIndex], 64)
-					fatal(err)
-					metric.gauge.Set(metricValue)
-					notFound = false
-				}
 			}
 			if notFound {
 				labels := prometheus.Labels{}
@@ -260,7 +258,7 @@ func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool
 				metricValue, err := strconv.ParseFloat(records[i][billedCostIndex], 64)
 				fatal(err)
 				newMetricsRow.Set(metricValue)
-				prometheusMetrics = append(prometheusMetrics, recordGaugeCombo{record: record, gauge: newMetricsRow})
+				prometheusMetrics[strings.Join(record, " ")] = recordGaugeCombo{record: record, gauge: newMetricsRow}
 				registry.MustRegister(newMetricsRow)
 			}
 		}
@@ -290,7 +288,7 @@ func main() {
 
 	registry := prometheus.NewRegistry()
 
-	go updatedMetrics(config, useConfig, registry, []recordGaugeCombo{})
+	go updatedMetrics(config, useConfig, registry, map[string]recordGaugeCombo{})
 
 	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 
