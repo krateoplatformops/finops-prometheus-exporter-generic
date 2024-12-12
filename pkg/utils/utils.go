@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	configPackage "github.com/krateoplatformops/finops-prometheus-exporter-generic/pkg/config"
 
 	finopsDataTypes "github.com/krateoplatformops/finops-data-types/api/v1"
@@ -60,7 +62,7 @@ func StartNewExporters(config finopsDataTypes.ExporterScraperConfig) error {
 
 					additionalVariables := config.Spec.ExporterConfig.AdditionalVariables
 					additionalVariables["ResourceId"] = resourceId
-					fmt.Println("new additional variables\n", additionalVariables)
+					log.Logger.Info().Msgf("new additional variables %s", additionalVariables)
 
 					url += fmt.Sprintf(metric.Endpoint.ResourceSuffix, urlPackage.QueryEscape(metric.MetricName), computeTimespan(metric.Timespan), metric.Interval)
 
@@ -173,8 +175,8 @@ func TryParseResponseAsFocusJSON(jsonData []byte) ([]byte, error) {
 	var focusConfigList finopsDataTypes.FocusConfigList
 	err := json.Unmarshal(jsonData, &focusConfigList)
 	if err != nil {
-		fmt.Println("\t", "Parsing failed:", err)
-		//fmt.Println(string(jsonData))
+		log.Logger.Warn().Err(err).Msg("Parsing failed")
+		//log.Logger.Info().Msg(string(jsonData))
 		return []byte{}, err
 	}
 
@@ -201,7 +203,7 @@ func GetOutputStr(configList finopsDataTypes.FocusConfigList) string {
 		outputStr = strings.TrimSuffix(outputStr, ",") + "\n"
 	}
 	outputStr = strings.TrimSuffix(outputStr, "\n")
-	fmt.Println(outputStr)
+	log.Logger.Info().Msg(outputStr)
 	return outputStr
 }
 
@@ -283,7 +285,7 @@ func InitializeResourcesWithProvider(config finopsDataTypes.ExporterScraperConfi
 
 	providerConfigSpec := providerConfig.Spec
 
-	fmt.Println("Found provider", config.Spec.ExporterConfig.Provider.Name)
+	log.Logger.Info().Msgf("Found provider %s", config.Spec.ExporterConfig.Provider.Name)
 	resourceStrings := []string{}
 
 	for _, resource := range providerConfigSpec.ResourcesRef {
@@ -306,7 +308,7 @@ func InitializeResourcesWithProvider(config finopsDataTypes.ExporterScraperConfi
 		resourceStrings = append(resourceStrings, resourceConfigSpec.ResourceFocusName)
 		ResourceList = append(ResourceList, resourceConfigSpec)
 
-		fmt.Println("Found resource", resourceConfigSpec.ResourceFocusName)
+		log.Logger.Info().Msgf("Found resource %s", resourceConfigSpec.ResourceFocusName)
 	}
 
 	return resourceStrings, nil
@@ -350,7 +352,7 @@ func getMetricsList(clientset *kubernetes.Clientset, resource configPackage.Reso
 		metricConfigSpec := metricConfig.Spec
 
 		result = append(result, metricConfigSpec)
-		fmt.Println("\t", "Found metric", metricConfigSpec.MetricName, metricConfigSpec.Interval, metricConfigSpec.Timespan)
+		log.Logger.Info().Msgf("\tFound metric %s, %s, %s", metricConfigSpec.MetricName, metricConfigSpec.Interval, metricConfigSpec.Timespan)
 	}
 
 	return result, nil
