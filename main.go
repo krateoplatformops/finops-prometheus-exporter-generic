@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -19,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
 	finopsDataTypes "github.com/krateoplatformops/finops-data-types/api/v1"
@@ -75,13 +75,13 @@ func ParseConfigFile(file string) (finopsDataTypes.ExporterScraperConfig, error)
 * @param targetAPI the configuration for the API request
 * @return the name of the saved file
  */
-func makeAPIRequest(config finopsDataTypes.ExporterScraperConfig) string {
+func makeAPIRequest(config finopsDataTypes.ExporterScraperConfig, fileName string) {
 	requestURL := fmt.Sprintf(config.Spec.ExporterConfig.UrlParsed)
 	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	request, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	fatal(err)
 
-	fmt.Println(requestURL)
+	log.Logger.Info().Msg(requestURL)
 
 	if config.Spec.ExporterConfig.RequireAuthentication {
 		switch config.Spec.ExporterConfig.AuthenticationMethod {
@@ -94,8 +94,8 @@ func makeAPIRequest(config finopsDataTypes.ExporterScraperConfig) string {
 		case "cert-file":
 			data, err := os.ReadFile(config.Spec.ExporterConfig.AdditionalVariables["certFilePath"])
 			if err != nil {
-				fmt.Println("There has been an error reading the cert-file")
-				return ""
+				log.Logger.Info().Msg("There has been an error reading the cert-file")
+				return
 			}
 			request.Header.Set("Authorization", "Bearer "+string(data))
 		}
@@ -128,20 +128,18 @@ func makeAPIRequest(config finopsDataTypes.ExporterScraperConfig) string {
 	data, err := io.ReadAll(res.Body)
 	fatal(err)
 
-	fmt.Println("Trying to parse data as JSON")
+	log.Logger.Info().Msg("Trying to parse data as JSON")
 	jsonDataParsed, err := utils.TryParseResponseAsFocusJSON(utils.TrapBOM(data))
 	if err != nil {
-		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Provider.Name), utils.TrapBOM(data), 0644)
+		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", fileName), utils.TrapBOM(data), 0644)
 		fatal(err)
 	} else {
-		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", config.Spec.ExporterConfig.Provider.Name), jsonDataParsed, 0644)
+		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", fileName), jsonDataParsed, 0644)
 		if err != nil {
 			fatal(err)
 		}
 
 	}
-
-	return config.Spec.ExporterConfig.Provider.Name
 }
 
 /*
@@ -172,9 +170,14 @@ func getRecordsFromFile(fileName string) [][]string {
 func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool, registry *prometheus.Registry, prometheusMetrics map[string]recordGaugeCombo) {
 	for {
 		attemptResourceExportersInThisIteration := true
-		fileName := config.Spec.ExporterConfig.Provider.Name
+		fileName := ""
+		if config.Spec.ExporterConfig.Provider.Name != "" {
+			fileName = config.Spec.ExporterConfig.Provider.Name
+		} else {
+			fileName = "download"
+		}
 		if useConfig {
-			fileName = makeAPIRequest(config)
+			makeAPIRequest(config, fileName)
 		}
 		records := getRecordsFromFile(fileName)
 
@@ -183,23 +186,26 @@ func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool
 			var err error
 			resourceTypes, err = utils.InitializeResourcesWithProvider(config)
 			if err != nil {
-				fmt.Println(err)
+				log.Logger.Warn().Err(err).Msg("error while retrieving provider name, continuing...")
 				attemptResourceExportersInThisIteration = false
 			}
 		}
 
 		// Obtain various indexes
 		// BilledCost for value of metric
-		// SerivceName and ResourceType to check if additional exporters need to be started
+		// ResourceType to check if additional exporters need to be started
 		billedCostIndex, err := utils.GetIndexOf(records, "BilledCost")
 		if err != nil {
-			fmt.Println(err)
+			log.Logger.Warn().Err(err).Msg("error while selecting column BilledCost, retrying...")
 			continue
 		}
-		resourceTypeIndex, err := utils.GetIndexOf(records, "ResourceType")
-		if err != nil {
-			fmt.Println(err)
-			continue
+		resourceTypeIndex := -1
+		if attemptResourceExportersInThisIteration {
+			resourceTypeIndex, err = utils.GetIndexOf(records, "ResourceType")
+			if err != nil {
+				log.Logger.Warn().Err(err).Msg("error while selecting column ResourceType, retrying...")
+				continue
+			}
 		}
 
 		notFound := true
@@ -213,7 +219,7 @@ func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool
 					if record[resourceTypeIndex] == resourceName {
 						resourceIdIndex, err := utils.GetIndexOf(records, "ResourceId")
 						if err != nil {
-							fmt.Println(err)
+							log.Logger.Warn().Err(err).Msg("error while selecting column ResourceId, retrying...")
 							continue
 						}
 						found := false
@@ -266,7 +272,7 @@ func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool
 		if attemptResourceExportersInThisIteration {
 			err = utils.StartNewExporters(config)
 			if err != nil {
-				fmt.Println(err)
+				log.Logger.Warn().Err(err).Msg("error while starting resource exporters, continuing...")
 			}
 		}
 		time.Sleep(time.Duration(config.Spec.ExporterConfig.PollingIntervalHours) * time.Hour)
@@ -280,6 +286,8 @@ func main() {
 	if len(os.Args) <= 1 {
 		config, err = ParseConfigFile("/config/config.yaml")
 		fatal(err)
+		log.Logger.Error().Msg("error while parsing configuration, exiting")
+		return
 	} else {
 		useConfig = false
 		config.Spec.ExporterConfig.Provider.Name = os.Args[1]
@@ -298,7 +306,6 @@ func main() {
 
 func fatal(err error) {
 	if err != nil {
-		log.Fatalln(err)
-		fmt.Println(err)
+		log.Logger.Warn().Err(err).Msg("an error has occured, continuing...")
 	}
 }
