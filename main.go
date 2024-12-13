@@ -285,9 +285,10 @@ func main() {
 	useConfig := true
 	if len(os.Args) <= 1 {
 		config, err = ParseConfigFile("/config/config.yaml")
-		fatal(err)
-		log.Logger.Error().Msg("error while parsing configuration, exiting")
-		return
+		if err != nil {
+			log.Logger.Error().Err(err).Msg("error while parsing configuration, exiting")
+			return
+		}
 	} else {
 		useConfig = false
 		config.Spec.ExporterConfig.Provider.Name = os.Args[1]
