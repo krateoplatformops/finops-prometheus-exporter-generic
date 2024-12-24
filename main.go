@@ -76,7 +76,7 @@ func ParseConfigFile(file string) (finopsDataTypes.ExporterScraperConfig, error)
 * @return the name of the saved file
  */
 func makeAPIRequest(config finopsDataTypes.ExporterScraperConfig, fileName string) {
-	requestURL := fmt.Sprintf(config.Spec.ExporterConfig.UrlParsed)
+	requestURL := config.Spec.ExporterConfig.UrlParsed
 	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	request, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	fatal(err)
