@@ -1,6 +1,6 @@
 package config
 
-import finopsDataTypes "github.com/krateoplatformops/finops-data-types/api/v1"
+import finopsdatatypes "github.com/krateoplatformops/finops-data-types/api/v1"
 
 type Kind struct {
 	Kind   string `json:"kind"`
@@ -20,12 +20,12 @@ type MetricConfig struct {
 }
 
 type ProviderConfigSpec struct {
-	ResourcesRef []finopsDataTypes.ObjectRef `json:"resourcesRef" yaml:"resourcesRef"`
+	ResourcesRef []finopsdatatypes.ObjectRef `json:"resourcesRef" yaml:"resourcesRef"`
 }
 
 type ResourceConfigSpec struct {
 	ResourceFocusName string                      `json:"resourceFocusName" yaml:"resourceFocusName"`
-	MetricsRef        []finopsDataTypes.ObjectRef `json:"metricsRef" yaml:"metricsRef"`
+	MetricsRef        []finopsdatatypes.ObjectRef `json:"metricsRef" yaml:"metricsRef"`
 }
 
 type MetricConfigSpec struct {
