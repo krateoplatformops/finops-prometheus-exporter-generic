@@ -8,16 +8,16 @@ import (
 	"fmt"
 	urlPackage "net/url"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
-	configPackage "github.com/krateoplatformops/finops-prometheus-exporter-generic/pkg/config"
+	configPackage "github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/config"
+	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/helpers/kube/httpcall"
 
-	finopsDataTypes "github.com/krateoplatformops/finops-data-types/api/v1"
+	finopsdatatypes "github.com/krateoplatformops/finops-data-types/api/v1"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,7 +36,7 @@ var (
 	ResourceIdTypeComboList []ResourceIdTypeCombo
 )
 
-func StartNewExporters(config finopsDataTypes.ExporterScraperConfig) error {
+func StartNewExporters(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint) error {
 	clientset, err := GetClientSet()
 	if err != nil {
 		return err
@@ -55,17 +55,11 @@ func StartNewExporters(config finopsDataTypes.ExporterScraperConfig) error {
 				for _, metric := range metricsList {
 					// The name for the ExporterScraperConfig to be created now
 					name := "exporterscraperconfig-" + strings.TrimSuffix(config.Spec.ExporterConfig.Provider.Name, "-exporter") + "-res" + strconv.FormatInt(int64(i), 10)
-					// Compute the URL starting from this exporter's URL
-					urlDomainRegex := regexp.MustCompile(`^(?:https?:\/\/)?(?:[^@\/\n]+@)?(?:www\.)?([^:\/?\n]+)(:[0-9]{4,4}){0,1}`)
-					urlsParts := urlDomainRegex.FindAllString(config.Spec.ExporterConfig.UrlParsed, -1)
-					url := strings.Join(urlsParts, "") + resourceId
-
 					additionalVariables := config.Spec.ExporterConfig.AdditionalVariables
 					additionalVariables["ResourceId"] = resourceId
-					log.Logger.Info().Msgf("new additional variables %s", additionalVariables)
 
-					url += fmt.Sprintf(metric.Endpoint.ResourceSuffix, urlPackage.QueryEscape(metric.MetricName), computeTimespan(metric.Timespan), metric.Interval)
-
+					api := config.Spec.ExporterConfig.API
+					api.Path = "/" + resourceId + fmt.Sprintf(metric.Endpoint.ResourceSuffix, urlPackage.QueryEscape(metric.MetricName), computeTimespan(metric.Timespan), metric.Interval)
 					// Check if the ExporterScraperConfig already exists
 					jsonData, _ := clientset.RESTClient().Get().
 						AbsPath("/apis/finops.krateo.io/v1").
@@ -79,7 +73,7 @@ func StartNewExporters(config finopsDataTypes.ExporterScraperConfig) error {
 					_ = json.Unmarshal(jsonData, &crdResponse)
 					// If it does not exist, build it
 					if crdResponse.Kind == "Status" && crdResponse.Status == "Failure" {
-						exporterScraperConfig := finopsDataTypes.ExporterScraperConfig{
+						exporterScraperConfig := finopsdatatypes.ExporterScraperConfig{
 							TypeMeta: metav1.TypeMeta{
 								Kind:       "ExporterScraperConfig",
 								APIVersion: "finops.krateo.io/v1",
@@ -96,25 +90,22 @@ func StartNewExporters(config finopsDataTypes.ExporterScraperConfig) error {
 									},
 								},
 							},
-							Spec: finopsDataTypes.ExporterScraperConfigSpec{
-								ExporterConfig: finopsDataTypes.ExporterConfigSpec{
-									Provider: finopsDataTypes.ObjectRef{
+							Spec: finopsdatatypes.ExporterScraperConfigSpec{
+								ExporterConfig: finopsdatatypes.ExporterConfigSpec{
+									Provider: finopsdatatypes.ObjectRef{
 										Name:      config.Spec.ExporterConfig.Provider.Name,
 										Namespace: config.Spec.ExporterConfig.Provider.Namespace,
 									},
-									Url:                   url,
-									MetricType:            "resource",
-									RequireAuthentication: config.Spec.ExporterConfig.RequireAuthentication,
-									AuthenticationMethod:  config.Spec.ExporterConfig.AuthenticationMethod,
-									BearerToken:           config.Spec.ExporterConfig.BearerToken,
-									PollingIntervalHours:  config.Spec.ExporterConfig.PollingIntervalHours,
-									AdditionalVariables:   additionalVariables,
+									API:                  api,
+									MetricType:           "resource",
+									PollingIntervalHours: config.Spec.ExporterConfig.PollingIntervalHours,
+									AdditionalVariables:  additionalVariables,
 								},
-								ScraperConfig: finopsDataTypes.ScraperConfigSpec{
+								ScraperConfig: finopsdatatypes.ScraperConfigSpec{
 									MetricType:           "resource",
 									TableName:            config.Spec.ScraperConfig.TableName + "_res",
 									PollingIntervalHours: config.Spec.ScraperConfig.PollingIntervalHours,
-									ScraperDatabaseConfigRef: finopsDataTypes.ObjectRef{
+									ScraperDatabaseConfigRef: finopsdatatypes.ObjectRef{
 										Name:      config.Spec.ScraperConfig.ScraperDatabaseConfigRef.Name,
 										Namespace: config.Spec.ScraperConfig.ScraperDatabaseConfigRef.Namespace,
 									},
@@ -172,7 +163,7 @@ func TrapBOM(file []byte) []byte {
 }
 
 func TryParseResponseAsFocusJSON(jsonData []byte) ([]byte, error) {
-	var focusConfigList finopsDataTypes.FocusConfigList
+	var focusConfigList finopsdatatypes.FocusConfigList
 	err := json.Unmarshal(jsonData, &focusConfigList)
 	if err != nil {
 		log.Logger.Warn().Err(err).Msg("Parsing failed")
@@ -185,7 +176,7 @@ func TryParseResponseAsFocusJSON(jsonData []byte) ([]byte, error) {
 	return []byte(outputStr), nil
 }
 
-func GetOutputStr(configList finopsDataTypes.FocusConfigList) string {
+func GetOutputStr(configList finopsdatatypes.FocusConfigList) string {
 	outputStr := ""
 	for i, config := range configList.Items {
 		v := reflect.ValueOf(config.Spec.FocusSpec)
@@ -233,7 +224,7 @@ func GetStringValue(value any) string {
 		return metav1Time.Format(time.RFC3339)
 	}
 
-	tags, ok := value.([]finopsDataTypes.TagsType)
+	tags, ok := value.([]finopsdatatypes.TagsType)
 	if ok {
 		res := ""
 		for _, tag := range tags {
@@ -260,7 +251,7 @@ func GetIndexOf(records [][]string, toFind string) (int, error) {
 	return -1, errors.New(toFind + " not found")
 }
 
-func InitializeResourcesWithProvider(config finopsDataTypes.ExporterScraperConfig) ([]string, error) {
+func InitializeResourcesWithProvider(config finopsdatatypes.ExporterScraperConfig) ([]string, error) {
 	clientset, err := GetClientSet()
 	if err != nil {
 		return []string{}, err
@@ -356,17 +347,4 @@ func getMetricsList(clientset *kubernetes.Clientset, resource configPackage.Reso
 	}
 
 	return result, nil
-}
-
-func GetBearerTokenSecret(config finopsDataTypes.ExporterScraperConfig) (string, error) {
-	clientset, err := GetClientSet()
-	if err != nil {
-		return "", err
-	}
-
-	secret, err := clientset.CoreV1().Secrets(config.Spec.ExporterConfig.BearerToken.Namespace).Get(context.TODO(), config.Spec.ExporterConfig.BearerToken.Name, metav1.GetOptions{})
-	if err != nil {
-		return "", err
-	}
-	return string(secret.Data[config.Spec.ExporterConfig.BearerToken.Key]), nil
 }

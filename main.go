@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/tls"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -13,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/krateoplatformops/finops-prometheus-exporter-generic/pkg/utils"
+	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/utils"
+	"k8s.io/client-go/rest"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -21,7 +22,9 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 
-	finopsDataTypes "github.com/krateoplatformops/finops-data-types/api/v1"
+	finopsdatatypes "github.com/krateoplatformops/finops-data-types/api/v1"
+	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/helpers/kube/endpoints"
+	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/helpers/kube/httpcall"
 )
 
 type recordGaugeCombo struct {
@@ -29,31 +32,36 @@ type recordGaugeCombo struct {
 	gauge  prometheus.Gauge
 }
 
-/*
-* Parse the given configuration file and unmarhsal it into the "config.Config" data type.
-* The configuration struct is an array of TargetAPI structs to allow the user to define multiple end-points for exporting.
-* @param file The path to the configuration file
- */
-func ParseConfigFile(file string) (finopsDataTypes.ExporterScraperConfig, error) {
+func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpcall.Endpoint, error) {
 	fileReader, err := os.OpenFile(file, os.O_RDONLY, 0600)
 	if err != nil {
-		return finopsDataTypes.ExporterScraperConfig{}, err
+		return finopsdatatypes.ExporterScraperConfig{}, &httpcall.Endpoint{}, err
 	}
 	defer fileReader.Close()
 	data, err := io.ReadAll(fileReader)
 	if err != nil {
-		return finopsDataTypes.ExporterScraperConfig{}, err
+		return finopsdatatypes.ExporterScraperConfig{}, &httpcall.Endpoint{}, err
 	}
 
-	parse := finopsDataTypes.ExporterScraperConfig{}
+	parse := finopsdatatypes.ExporterScraperConfig{}
 
 	err = yaml.Unmarshal(data, &parse)
 	if err != nil {
-		return finopsDataTypes.ExporterScraperConfig{}, err
+		return finopsdatatypes.ExporterScraperConfig{}, &httpcall.Endpoint{}, err
 	}
 
 	regex, _ := regexp.Compile("<.*?>")
-	newURL := parse.Spec.ExporterConfig.Url
+	rc, _ := rest.InClusterConfig()
+
+	endpoint, err := endpoints.Resolve(context.Background(), endpoints.ResolveOptions{
+		RESTConfig: rc,
+		API:        &parse.Spec.ExporterConfig.API,
+	})
+	if err != nil {
+		return finopsdatatypes.ExporterScraperConfig{}, &httpcall.Endpoint{}, err
+	}
+
+	newURL := endpoint.ServerURL
 	toReplaceRange := regex.FindStringIndex(newURL)
 	for toReplaceRange != nil {
 		// Use the indexes of the match of the regex to replace the URL with the value of the additional variable from the config file
@@ -66,50 +74,28 @@ func ParseConfigFile(file string) (finopsDataTypes.ExporterScraperConfig, error)
 		newURL = strings.Replace(newURL, newURL[toReplaceRange[0]:toReplaceRange[1]], varToReplace, -1)
 		toReplaceRange = regex.FindStringIndex(newURL)
 	}
-	parse.Spec.ExporterConfig.UrlParsed = newURL
-	return parse, nil
+	endpoint.ServerURL = newURL
+
+	return parse, endpoint, nil
 }
 
-/*
-* This function makes the API request to download the FOCUS csv file according to the given configuration.
-* @param targetAPI the configuration for the API request
-* @return the name of the saved file
- */
-func makeAPIRequest(config finopsDataTypes.ExporterScraperConfig, fileName string) {
-	requestURL := config.Spec.ExporterConfig.UrlParsed
-	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	request, err := http.NewRequest(http.MethodGet, requestURL, nil)
-	fatal(err)
+func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, fileName string) {
+	log.Logger.Info().Msgf("Request URL: %s", endpoint.ServerURL)
 
-	log.Logger.Info().Msg(requestURL)
-
-	if config.Spec.ExporterConfig.RequireAuthentication {
-		switch config.Spec.ExporterConfig.AuthenticationMethod {
-		case "bearer-token":
-			token, err := utils.GetBearerTokenSecret(config)
-			if err != nil {
-				fatal(err)
-			}
-			request.Header.Set("Authorization", "Bearer "+token)
-		case "cert-file":
-			data, err := os.ReadFile(config.Spec.ExporterConfig.AdditionalVariables["certFilePath"])
-			if err != nil {
-				log.Logger.Info().Msg("There has been an error reading the cert-file")
-				return
-			}
-			request.Header.Set("Authorization", "Bearer "+string(data))
-		}
-	}
-
-	res, err := http.DefaultClient.Do(request)
-	fatal(err)
-
-	defer res.Body.Close()
-
-	if res.StatusCode == 400 {
-		res, err = http.DefaultClient.Do(request)
+	httpClient, err := httpcall.HTTPClientForEndpoint(endpoint)
+	if err != nil {
 		fatal(err)
 	}
+
+	res, err := httpcall.Do(context.TODO(), httpClient, httpcall.Options{
+		API:      &config.Spec.ExporterConfig.API,
+		Endpoint: endpoint,
+	})
+	if err != nil {
+		fatal(err)
+	}
+
+	defer res.Body.Close()
 
 	if res.StatusCode == 202 {
 		res.Body.Close()
@@ -142,11 +128,6 @@ func makeAPIRequest(config finopsDataTypes.ExporterScraperConfig, fileName strin
 	}
 }
 
-/*
-* This function reads the given csv file and returns the record list.
-* @param fileName the name of the FOCUS csv file
-* @return csv file as a 2D array of strings
- */
 func getRecordsFromFile(fileName string) [][]string {
 	file, err := os.Open(fmt.Sprintf("/temp/%s.dat", fileName))
 	fatal(err)
@@ -161,13 +142,7 @@ func getRecordsFromFile(fileName string) [][]string {
 	return records
 }
 
-/*
-* This function creates and maintains the prometheus gauges. Periodically, it updates the records csv file and checks if there are new rows to add to the registry.
-* @param targetAPI the configuration for the API request
-* @param registry the prometheus registry to add the gauges to
-* @param prometheusMetrics the array of structs that contain gauges and the record the gauge was created from (to check when there are new records if it has already been created)
- */
-func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool, registry *prometheus.Registry, prometheusMetrics map[string]recordGaugeCombo) {
+func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, useConfig bool, registry *prometheus.Registry, prometheusMetrics map[string]recordGaugeCombo) {
 	for {
 		attemptResourceExportersInThisIteration := true
 		fileName := ""
@@ -177,7 +152,7 @@ func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool
 			fileName = "download"
 		}
 		if useConfig {
-			makeAPIRequest(config, fileName)
+			makeAPIRequest(config, endpoint, fileName)
 		}
 		records := getRecordsFromFile(fileName)
 
@@ -270,7 +245,7 @@ func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool
 		}
 
 		if attemptResourceExportersInThisIteration {
-			err = utils.StartNewExporters(config)
+			err = utils.StartNewExporters(config, endpoint)
 			if err != nil {
 				log.Logger.Warn().Err(err).Msg("error while starting resource exporters, continuing...")
 			}
@@ -281,10 +256,11 @@ func updatedMetrics(config finopsDataTypes.ExporterScraperConfig, useConfig bool
 
 func main() {
 	var err error
-	config := finopsDataTypes.ExporterScraperConfig{}
+	config := finopsdatatypes.ExporterScraperConfig{}
+	endpoint := &httpcall.Endpoint{}
 	useConfig := true
 	if len(os.Args) <= 1 {
-		config, err = ParseConfigFile("/config/config.yaml")
+		config, endpoint, err = ParseConfigFile("/config/config.yaml")
 		if err != nil {
 			log.Logger.Error().Err(err).Msg("error while parsing configuration, exiting")
 			return
@@ -297,7 +273,7 @@ func main() {
 
 	registry := prometheus.NewRegistry()
 
-	go updatedMetrics(config, useConfig, registry, map[string]recordGaugeCombo{})
+	go updatedMetrics(config, endpoint, useConfig, registry, map[string]recordGaugeCombo{})
 
 	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 
