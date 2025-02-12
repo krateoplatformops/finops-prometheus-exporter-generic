@@ -76,6 +76,21 @@ func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpc
 	}
 	endpoint.ServerURL = newURL
 
+	newURL = parse.Spec.ExporterConfig.API.Path
+	toReplaceRange = regex.FindStringIndex(newURL)
+	for toReplaceRange != nil {
+		// Use the indexes of the match of the regex to replace the URL with the value of the additional variable from the config file
+		// The replacement has +1/-1 on the indexes to remove the < and > from the string to use as key in the config map
+		// If the replacement contains ONLY uppercase letters, it is taken from environment variables
+		varToReplace := parse.Spec.ExporterConfig.AdditionalVariables[newURL[toReplaceRange[0]+1:toReplaceRange[1]-1]]
+		if varToReplace == strings.ToUpper(varToReplace) {
+			varToReplace = os.Getenv(varToReplace)
+		}
+		newURL = strings.Replace(newURL, newURL[toReplaceRange[0]:toReplaceRange[1]], varToReplace, -1)
+		toReplaceRange = regex.FindStringIndex(newURL)
+	}
+	parse.Spec.ExporterConfig.API.Path = newURL
+
 	return parse, endpoint, nil
 }
 
