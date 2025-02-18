@@ -28,8 +28,9 @@ import (
 )
 
 type recordGaugeCombo struct {
-	record []string
-	gauge  prometheus.Gauge
+	record        []string
+	gauge         prometheus.Gauge
+	thisIteration bool
 }
 
 func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpcall.Endpoint, error) {
@@ -229,7 +230,10 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 			if _, ok := prometheusMetrics[strings.Join(record, " ")]; ok {
 				metricValue, err := strconv.ParseFloat(record[billedCostIndex], 64)
 				fatal(err)
-				prometheusMetrics[strings.Join(record, " ")].gauge.Set(metricValue)
+				gaugeObj := prometheusMetrics[strings.Join(record, " ")]
+				gaugeObj.gauge.Set(metricValue)
+				gaugeObj.thisIteration = true
+				prometheusMetrics[strings.Join(record, " ")] = gaugeObj
 				notFound = false
 
 			}
@@ -254,7 +258,7 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 				metricValue, err := strconv.ParseFloat(records[i][billedCostIndex], 64)
 				fatal(err)
 				newMetricsRow.Set(metricValue)
-				prometheusMetrics[strings.Join(record, " ")] = recordGaugeCombo{record: record, gauge: newMetricsRow}
+				prometheusMetrics[strings.Join(record, " ")] = recordGaugeCombo{record: record, gauge: newMetricsRow, thisIteration: true}
 				registry.MustRegister(newMetricsRow)
 			}
 		}
@@ -265,7 +269,23 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 				log.Logger.Warn().Err(err).Msg("error while starting resource exporters, continuing...")
 			}
 		}
-		time.Sleep(time.Duration(config.Spec.ExporterConfig.PollingIntervalHours) * time.Hour)
+
+		for key, gaugeObj := range prometheusMetrics {
+			if !gaugeObj.thisIteration {
+				registry.Unregister(gaugeObj.gauge)
+				delete(prometheusMetrics, key)
+			} else {
+				gaugeObj.thisIteration = false
+				prometheusMetrics[key] = gaugeObj
+			}
+		}
+		sleepFor := config.Spec.ExporterConfig.PollingIntervalHours
+		if sleepFor <= 0 {
+			log.Logger.Info().Msgf("Polling interval is %d, overriding with 5 minutes...", sleepFor)
+			time.Sleep(time.Duration(time.Duration(5) * time.Minute))
+		} else {
+			time.Sleep(time.Duration(time.Duration(sleepFor) * time.Hour))
+		}
 	}
 }
 
