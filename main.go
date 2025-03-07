@@ -25,6 +25,7 @@ import (
 	finopsdatatypes "github.com/krateoplatformops/finops-data-types/api/v1"
 	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/helpers/kube/endpoints"
 	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/helpers/kube/httpcall"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type recordGaugeCombo struct {
@@ -279,13 +280,7 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 				prometheusMetrics[key] = gaugeObj
 			}
 		}
-		sleepFor := config.Spec.ExporterConfig.PollingIntervalHours
-		if sleepFor <= 0 {
-			log.Logger.Info().Msgf("Polling interval is %d, overriding with 5 minutes...", sleepFor)
-			time.Sleep(time.Duration(time.Duration(5) * time.Minute))
-		} else {
-			time.Sleep(time.Duration(time.Duration(sleepFor) * time.Hour))
-		}
+		time.Sleep(config.Spec.ExporterConfig.PollingInterval.Duration)
 	}
 }
 
@@ -303,8 +298,10 @@ func main() {
 	} else {
 		useConfig = false
 		config.Spec.ExporterConfig.Provider.Name = os.Args[1]
-		config.Spec.ExporterConfig.PollingIntervalHours = 1
+		config.Spec.ExporterConfig.PollingInterval = metav1.Duration{Duration: 1 * time.Hour}
 	}
+
+	log.Debug().Msgf("Polling interval set to %s", config.Spec.ExporterConfig.PollingInterval.Duration.String())
 
 	registry := prometheus.NewRegistry()
 
