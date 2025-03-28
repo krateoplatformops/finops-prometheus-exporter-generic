@@ -58,8 +58,13 @@ func StartNewExporters(config finopsdatatypes.ExporterScraperConfig, endpoint *h
 					additionalVariables := config.Spec.ExporterConfig.AdditionalVariables
 					additionalVariables["ResourceId"] = resourceId
 
-					api := config.Spec.ExporterConfig.API
-					api.Path = "/" + resourceId + fmt.Sprintf(metric.Endpoint.ResourceSuffix, urlPackage.QueryEscape(metric.MetricName), computeTimespan(metric.Timespan), metric.Interval)
+					var api finopsdatatypes.API
+					if metric.Endpoint.ResourcePrefixAPI == nil {
+						api = config.Spec.ExporterConfig.API
+					} else {
+						api = *metric.Endpoint.ResourcePrefixAPI
+					}
+					api.Path = resourceId + fmt.Sprintf(metric.Endpoint.ResourceSuffix, urlPackage.QueryEscape(metric.MetricName), computeTimespan(metric.Timespan), metric.Interval)
 					// Check if the ExporterScraperConfig already exists
 					jsonData, _ := clientset.RESTClient().Get().
 						AbsPath("/apis/finops.krateo.io/v1").
@@ -145,13 +150,13 @@ func computeTimespan(timespanName string) string {
 	dateFormat := "2006-01-02"
 	switch timespanName {
 	case "day":
-		return time.Now().Format(dateFormat) + "/" + time.Now().AddDate(0, 0, -1).Format(dateFormat)
+		return time.Now().AddDate(0, 0, -1).Format(dateFormat) + "/" + time.Now().Format(dateFormat)
 	case "month":
-		return time.Now().Format(dateFormat) + "/" + time.Now().AddDate(0, -1, 0).Format(dateFormat)
+		return time.Now().AddDate(0, -1, 0).Format(dateFormat) + "/" + time.Now().Format(dateFormat)
 	case "year":
-		return time.Now().Format(dateFormat) + "/" + time.Now().AddDate(-1, 0, 0).Format(dateFormat)
+		return time.Now().AddDate(-1, 0, 0).Format(dateFormat) + "/" + time.Now().Format(dateFormat)
 	}
-	return time.Now().Format(dateFormat) + "/" + time.Now().AddDate(0, -1, 0).Format(dateFormat)
+	return time.Now().AddDate(0, -1, 0).Format(dateFormat) + "/" + time.Now().Format(dateFormat)
 }
 
 /*
@@ -243,9 +248,13 @@ func GetStringValue(value any) string {
 * @return the index of the "toFind" column
  */
 func GetIndexOf(records [][]string, toFind string) (int, error) {
-	for i, value := range records[0] {
-		if value == toFind {
-			return i, nil
+	log.Debug().Msgf("Looking for %s", toFind)
+	if len(records) > 0 {
+		for i, value := range records[0] {
+			log.Debug().Msgf("Analyzing %s", value)
+			if strings.ToLower(value) == strings.ToLower(toFind) {
+				return i, nil
+			}
 		}
 	}
 	return -1, errors.New(toFind + " not found")
