@@ -36,6 +36,6 @@ type MetricConfigSpec struct {
 }
 
 type Endpoint struct {
-	ResourcePrefix string `json:"resourcePrefix" yaml:"resourcePrefix"`
-	ResourceSuffix string `json:"resourceSuffix" yaml:"resourceSuffix"`
+	ResourcePrefixAPI *finopsdatatypes.API `json:"resourcePrefixAPI" yaml:"resourcePrefixAPI"`
+	ResourceSuffix    string               `json:"resourceSuffix" yaml:"resourceSuffix"`
 }

@@ -108,8 +108,14 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 		API:      &config.Spec.ExporterConfig.API,
 		Endpoint: endpoint,
 	})
-	if err != nil {
+	for err != nil {
 		fatal(err)
+		log.Logger.Warn().Msgf("Retrying connection in 5s...")
+		time.Sleep(5 * time.Second)
+		res, err = httpcall.Do(context.TODO(), httpClient, httpcall.Options{
+			API:      &config.Spec.ExporterConfig.API,
+			Endpoint: endpoint,
+		})
 	}
 
 	defer res.Body.Close()
@@ -130,6 +136,11 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 	}
 	data, err := io.ReadAll(res.Body)
 	fatal(err)
+
+	if res.StatusCode != 200 {
+		log.Warn().Msgf("Received status code %d", res.StatusCode)
+		log.Debug().Msgf("body: %s", data)
+	}
 
 	log.Logger.Info().Msg("Trying to parse data as JSON")
 	jsonDataParsed, err := utils.TryParseResponseAsFocusJSON(utils.TrapBOM(data))
@@ -152,6 +163,7 @@ func getRecordsFromFile(fileName string) [][]string {
 	defer file.Close()
 
 	reader := csv.NewReader(file)
+	reader.LazyQuotes = true
 
 	records, err := reader.ReadAll()
 	fatal(err)
@@ -201,6 +213,7 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 		}
 
 		notFound := true
+		log.Info().Msgf("Analyzing %d records...", len(records))
 		for i, record := range records {
 			// Skip header line
 			if i == 0 {
