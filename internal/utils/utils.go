@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	urlPackage "net/url"
+	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -251,7 +253,6 @@ func GetIndexOf(records [][]string, toFind string) (int, error) {
 	log.Debug().Msgf("Looking for %s", toFind)
 	if len(records) > 0 {
 		for i, value := range records[0] {
-			log.Debug().Msgf("Analyzing %s", value)
 			if strings.ToLower(value) == strings.ToLower(toFind) {
 				return i, nil
 			}
@@ -356,4 +357,32 @@ func getMetricsList(clientset *kubernetes.Clientset, resource configPackage.Reso
 	}
 
 	return result, nil
+}
+
+// replaceVariables replaces all variables in the format <variable> with their values
+// from the additionalVariables map or from environment variables if the variable name is uppercase
+func ReplaceVariables(text string, additionalVariables map[string]string) string {
+	regex, _ := regexp.Compile("<.*?>")
+	toReplaceRange := regex.FindStringIndex(text)
+
+	for toReplaceRange != nil {
+		// Extract variable name without the < > brackets
+		varName := text[toReplaceRange[0]+1 : toReplaceRange[1]-1]
+
+		// Get replacement value from additionalVariables
+		varToReplace := additionalVariables[varName]
+
+		// If the variable name is all uppercase, get value from environment
+		if varToReplace == strings.ToUpper(varToReplace) {
+			varToReplace = os.Getenv(varToReplace)
+		}
+
+		// Replace the variable in the text
+		text = strings.Replace(text, text[toReplaceRange[0]:toReplaceRange[1]], varToReplace, -1)
+
+		// Find next variable
+		toReplaceRange = regex.FindStringIndex(text)
+	}
+
+	return text
 }

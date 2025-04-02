@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -52,9 +50,7 @@ func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpc
 		return finopsdatatypes.ExporterScraperConfig{}, &httpcall.Endpoint{}, err
 	}
 
-	regex, _ := regexp.Compile("<.*?>")
 	rc, _ := rest.InClusterConfig()
-
 	endpoint, err := endpoints.Resolve(context.Background(), endpoints.ResolveOptions{
 		RESTConfig: rc,
 		API:        &parse.Spec.ExporterConfig.API,
@@ -63,35 +59,11 @@ func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpc
 		return finopsdatatypes.ExporterScraperConfig{}, &httpcall.Endpoint{}, err
 	}
 
-	newURL := endpoint.ServerURL
-	toReplaceRange := regex.FindStringIndex(newURL)
-	for toReplaceRange != nil {
-		// Use the indexes of the match of the regex to replace the URL with the value of the additional variable from the config file
-		// The replacement has +1/-1 on the indexes to remove the < and > from the string to use as key in the config map
-		// If the replacement contains ONLY uppercase letters, it is taken from environment variables
-		varToReplace := parse.Spec.ExporterConfig.AdditionalVariables[newURL[toReplaceRange[0]+1:toReplaceRange[1]-1]]
-		if varToReplace == strings.ToUpper(varToReplace) {
-			varToReplace = os.Getenv(varToReplace)
-		}
-		newURL = strings.Replace(newURL, newURL[toReplaceRange[0]:toReplaceRange[1]], varToReplace, -1)
-		toReplaceRange = regex.FindStringIndex(newURL)
-	}
-	endpoint.ServerURL = newURL
+	// Replace variables in server URL
+	endpoint.ServerURL = utils.ReplaceVariables(endpoint.ServerURL, parse.Spec.ExporterConfig.AdditionalVariables)
 
-	newURL = parse.Spec.ExporterConfig.API.Path
-	toReplaceRange = regex.FindStringIndex(newURL)
-	for toReplaceRange != nil {
-		// Use the indexes of the match of the regex to replace the URL with the value of the additional variable from the config file
-		// The replacement has +1/-1 on the indexes to remove the < and > from the string to use as key in the config map
-		// If the replacement contains ONLY uppercase letters, it is taken from environment variables
-		varToReplace := parse.Spec.ExporterConfig.AdditionalVariables[newURL[toReplaceRange[0]+1:toReplaceRange[1]-1]]
-		if varToReplace == strings.ToUpper(varToReplace) {
-			varToReplace = os.Getenv(varToReplace)
-		}
-		newURL = strings.Replace(newURL, newURL[toReplaceRange[0]:toReplaceRange[1]], varToReplace, -1)
-		toReplaceRange = regex.FindStringIndex(newURL)
-	}
-	parse.Spec.ExporterConfig.API.Path = newURL
+	// Replace variables in API path
+	parse.Spec.ExporterConfig.API.Path = utils.ReplaceVariables(parse.Spec.ExporterConfig.API.Path, parse.Spec.ExporterConfig.AdditionalVariables)
 
 	return parse, endpoint, nil
 }
@@ -99,48 +71,44 @@ func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpc
 func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, fileName string) {
 	log.Logger.Info().Msgf("Request URL: %s", endpoint.ServerURL)
 
-	httpClient, err := httpcall.HTTPClientForEndpoint(endpoint)
-	if err != nil {
-		fatal(err)
-	}
+	res := &http.Response{StatusCode: 500}
+	err_call := fmt.Errorf("")
 
-	res, err := httpcall.Do(context.TODO(), httpClient, httpcall.Options{
-		API:      &config.Spec.ExporterConfig.API,
-		Endpoint: endpoint,
-	})
-	for err != nil {
-		fatal(err)
-		log.Logger.Warn().Msgf("Retrying connection in 5s...")
-		time.Sleep(5 * time.Second)
-		res, err = httpcall.Do(context.TODO(), httpClient, httpcall.Options{
+	for ok := true; ok; ok = (err_call != nil || res.StatusCode != 200) {
+		httpClient, err := httpcall.HTTPClientForEndpoint(endpoint)
+		if err != nil {
+			fatal(err)
+		}
+
+		res, err_call = httpcall.Do(context.TODO(), httpClient, httpcall.Options{
 			API:      &config.Spec.ExporterConfig.API,
 			Endpoint: endpoint,
 		})
+
+		if err == nil && res.StatusCode != 200 {
+			log.Warn().Msgf("Received status code %d", res.StatusCode)
+		} else {
+			fatal(err)
+		}
+		log.Logger.Warn().Msgf("Retrying connection in 5s...")
+		time.Sleep(5 * time.Second)
+
+		log.Logger.Info().Msgf("Parsing Endpoint again...")
+		rc, _ := rest.InClusterConfig()
+		endpoint, err = endpoints.Resolve(context.Background(), endpoints.ResolveOptions{
+			RESTConfig: rc,
+			API:        &config.Spec.ExporterConfig.API,
+		})
+		if err != nil {
+			continue
+		}
+		endpoint.ServerURL = utils.ReplaceVariables(endpoint.ServerURL, config.Spec.ExporterConfig.AdditionalVariables)
 	}
 
 	defer res.Body.Close()
 
-	if res.StatusCode == 202 {
-		res.Body.Close()
-		secondsToSleep, _ := strconv.ParseInt(res.Header.Get("Retry-after"), 10, 64)
-		time.Sleep(time.Duration(secondsToSleep) * time.Second)
-		res, err = http.Get(res.Header.Get("Location"))
-		fatal(err)
-
-		var data map[string]string
-		err = json.NewDecoder(res.Body).Decode(&data)
-		fatal(err)
-		res.Body.Close()
-		res, err = http.Get(data["downloadUrl"])
-		fatal(err)
-	}
 	data, err := io.ReadAll(res.Body)
 	fatal(err)
-
-	if res.StatusCode != 200 {
-		log.Warn().Msgf("Received status code %d", res.StatusCode)
-		log.Debug().Msgf("body: %s", data)
-	}
 
 	log.Logger.Info().Msg("Trying to parse data as JSON")
 	jsonDataParsed, err := utils.TryParseResponseAsFocusJSON(utils.TrapBOM(data))
