@@ -8,3 +8,6 @@ build:
 container:
 	docker build -t $(REPO)finops-prometheus-exporter-generic:$(VERSION) .
 	docker push $(REPO)finops-prometheus-exporter-generic:$(VERSION)
+
+container-multi:
+	docker buildx build --tag $(REPO)finops-prometheus-exporter-generic:$(VERSION) --push --platform linux/amd64,linux/arm64 .

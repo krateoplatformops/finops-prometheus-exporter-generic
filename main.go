@@ -234,7 +234,7 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 				}
 
 				newMetricsRow := promauto.NewGauge(prometheus.GaugeOpts{
-					Name:        fmt.Sprintf("billed_cost_%s_%d", strings.ReplaceAll(config.Spec.ExporterConfig.Provider.Name, "-", "_"), i),
+					Name:        "billed_cost",
 					ConstLabels: labels,
 				})
 				metricValue, err := strconv.ParseFloat(records[i][billedCostIndex], 64)
