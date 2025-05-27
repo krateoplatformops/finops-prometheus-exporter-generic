@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -69,7 +70,12 @@ func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpc
 }
 
 func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, fileName string) {
-	log.Logger.Info().Msgf("Request URL: %s", endpoint.ServerURL)
+	completeURL, err := url.JoinPath(endpoint.ServerURL, config.Spec.ExporterConfig.API.Path)
+	if err != nil {
+		log.Logger.Warn().Err(err).Msgf("Could not create final URL with %s and %s", endpoint.ServerURL, config.Spec.ExporterConfig.API.Path)
+	} else {
+		log.Logger.Info().Msgf("Request URL: %s", completeURL)
+	}
 
 	res := &http.Response{StatusCode: 500}
 	err_call := fmt.Errorf("")
@@ -77,7 +83,7 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 	for ok := true; ok; ok = (err_call != nil || res.StatusCode != 200) {
 		httpClient, err := httpcall.HTTPClientForEndpoint(endpoint)
 		if err != nil {
-			fatal(err)
+			log.Logger.Warn().Err(err).Msg("error while creating HTTP client")
 		}
 
 		res, err_call = httpcall.Do(context.TODO(), httpClient, httpcall.Options{
@@ -88,7 +94,7 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 		if err == nil && res.StatusCode != 200 {
 			log.Warn().Msgf("Received status code %d", res.StatusCode)
 		} else {
-			fatal(err)
+			log.Logger.Warn().Err(err).Msg("error occurred while making API call")
 		}
 		log.Logger.Warn().Msgf("Retrying connection in 5s...")
 		time.Sleep(5 * time.Second)
@@ -108,17 +114,21 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 	defer res.Body.Close()
 
 	data, err := io.ReadAll(res.Body)
-	fatal(err)
+	if err != nil {
+		log.Logger.Warn().Err(err).Msg("an error has occured while reading response body")
+	}
 
 	log.Logger.Info().Msg("Trying to parse data as JSON")
 	jsonDataParsed, err := utils.TryParseResponseAsFocusJSON(utils.TrapBOM(data))
 	if err != nil {
 		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", fileName), utils.TrapBOM(data), 0644)
-		fatal(err)
+		if err != nil {
+			log.Logger.Warn().Err(err).Msgf("error while writing data to file %s", fileName)
+		}
 	} else {
 		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", fileName), jsonDataParsed, 0644)
 		if err != nil {
-			fatal(err)
+			log.Logger.Warn().Err(err).Msgf("error while writing data to file %s", fileName)
 		}
 
 	}
@@ -126,7 +136,10 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 
 func getRecordsFromFile(fileName string) [][]string {
 	file, err := os.Open(fmt.Sprintf("/temp/%s.dat", fileName))
-	fatal(err)
+	if err != nil {
+		log.Logger.Warn().Err(err).Msgf("error while opening file %s", fileName)
+		return nil
+	}
 
 	defer file.Close()
 
@@ -134,14 +147,16 @@ func getRecordsFromFile(fileName string) [][]string {
 	reader.LazyQuotes = true
 
 	records, err := reader.ReadAll()
-	fatal(err)
+	if err != nil {
+		log.Logger.Warn().Err(err).Msgf("error while reading file %s", fileName)
+		return nil
+	}
 
 	return records
 }
 
 func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, useConfig bool, registry *prometheus.Registry, prometheusMetrics map[string]recordGaugeCombo) {
 	for {
-		attemptResourceExportersInThisIteration := true
 		fileName := ""
 		if config.Spec.ExporterConfig.Provider.Name != "" {
 			fileName = config.Spec.ExporterConfig.Provider.Name
@@ -153,31 +168,13 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 		}
 		records := getRecordsFromFile(fileName)
 
-		resourceTypes := []string{}
-		if config.Spec.ExporterConfig.Provider.Name != "" {
-			var err error
-			resourceTypes, err = utils.InitializeResourcesWithProvider(config)
-			if err != nil {
-				log.Logger.Warn().Err(err).Msg("error while retrieving provider name, continuing...")
-				attemptResourceExportersInThisIteration = false
-			}
-		}
-
 		// Obtain various indexes
 		// BilledCost for value of metric
-		// ResourceType to check if additional exporters need to be started
 		billedCostIndex, err := utils.GetIndexOf(records, "BilledCost")
 		if err != nil {
 			log.Logger.Warn().Err(err).Msg("error while selecting column BilledCost, retrying...")
+			time.Sleep(5 * time.Second)
 			continue
-		}
-		resourceTypeIndex := -1
-		if attemptResourceExportersInThisIteration {
-			resourceTypeIndex, err = utils.GetIndexOf(records, "ResourceType")
-			if err != nil {
-				log.Logger.Warn().Err(err).Msg("error while selecting column ResourceType, retrying...")
-				continue
-			}
 		}
 
 		notFound := true
@@ -187,31 +184,14 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 			if i == 0 {
 				continue
 			}
-			if attemptResourceExportersInThisIteration {
-				for _, resourceName := range resourceTypes {
-					if record[resourceTypeIndex] == resourceName {
-						resourceIdIndex, err := utils.GetIndexOf(records, "ResourceId")
-						if err != nil {
-							log.Logger.Warn().Err(err).Msg("error while selecting column ResourceId, retrying...")
-							continue
-						}
-						found := false
-						for _, elem := range utils.ResourceIdTypeComboList {
-							if strings.EqualFold(record[resourceIdIndex], elem.ResourceId) {
-								found = true
-							}
-						}
-						if !found {
-							utils.ResourceIdTypeComboList = append(utils.ResourceIdTypeComboList, utils.ResourceIdTypeCombo{ResourceId: record[resourceIdIndex], ResourceType: resourceName})
-						}
-					}
-				}
-			}
 
 			notFound = true
 			if _, ok := prometheusMetrics[strings.Join(record, " ")]; ok {
 				metricValue, err := strconv.ParseFloat(record[billedCostIndex], 64)
-				fatal(err)
+				if err != nil {
+					log.Logger.Warn().Err(err).Msgf("skipping this record for this iteration, error while parsing metric value: %s", record[billedCostIndex])
+					continue
+				}
 				gaugeObj := prometheusMetrics[strings.Join(record, " ")]
 				gaugeObj.gauge.Set(metricValue)
 				gaugeObj.thisIteration = true
@@ -238,17 +218,13 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 					ConstLabels: labels,
 				})
 				metricValue, err := strconv.ParseFloat(records[i][billedCostIndex], 64)
-				fatal(err)
+				if err != nil {
+					log.Logger.Warn().Err(err).Msgf("skipping this record for this iteration, error while parsing metric value: %s", records[i][billedCostIndex])
+					continue
+				}
 				newMetricsRow.Set(metricValue)
 				prometheusMetrics[strings.Join(record, " ")] = recordGaugeCombo{record: record, gauge: newMetricsRow, thisIteration: true}
 				registry.MustRegister(newMetricsRow)
-			}
-		}
-
-		if attemptResourceExportersInThisIteration {
-			err = utils.StartNewExporters(config, endpoint)
-			if err != nil {
-				log.Logger.Warn().Err(err).Msg("error while starting resource exporters, continuing...")
 			}
 		}
 
@@ -292,10 +268,4 @@ func main() {
 
 	http.Handle("/metrics", handler)
 	http.ListenAndServe(":2112", nil)
-}
-
-func fatal(err error) {
-	if err != nil {
-		log.Logger.Warn().Err(err).Msg("an error has occured, continuing...")
-	}
 }
