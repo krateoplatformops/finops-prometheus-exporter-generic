@@ -2,7 +2,6 @@ package utils
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -14,8 +13,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	configPackage "github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/config"
-
 	finopsdatatypes "github.com/krateoplatformops/finops-data-types/api/v1"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -24,24 +21,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
-
-var (
-	ResourceList []configPackage.ResourceConfigSpec
-)
-
-func computeTimespan(timespanName string) string {
-	// Format: yyyy-mm-dd
-	dateFormat := "2006-01-02"
-	switch timespanName {
-	case "day":
-		return time.Now().AddDate(0, 0, -1).Format(dateFormat) + "/" + time.Now().Format(dateFormat)
-	case "month":
-		return time.Now().AddDate(0, -1, 0).Format(dateFormat) + "/" + time.Now().Format(dateFormat)
-	case "year":
-		return time.Now().AddDate(-1, 0, 0).Format(dateFormat) + "/" + time.Now().Format(dateFormat)
-	}
-	return time.Now().AddDate(0, -1, 0).Format(dateFormat) + "/" + time.Now().Format(dateFormat)
-}
 
 /*
 * Function to remove the encoding bytes from a file.
@@ -135,66 +114,12 @@ func GetIndexOf(records [][]string, toFind string) (int, error) {
 	log.Debug().Msgf("Looking for %s", toFind)
 	if len(records) > 0 {
 		for i, value := range records[0] {
-			if strings.ToLower(value) == strings.ToLower(toFind) {
+			if strings.EqualFold(value, toFind) {
 				return i, nil
 			}
 		}
 	}
 	return -1, errors.New(toFind + " not found")
-}
-
-func InitializeResourcesWithProvider(config finopsdatatypes.ExporterScraperConfig) ([]string, error) {
-	clientset, err := GetClientSet()
-	if err != nil {
-		return []string{}, err
-	}
-
-	jsonData, err := clientset.RESTClient().
-		Get().
-		AbsPath("/apis/finops.krateo.io/v1").
-		Namespace(config.Spec.ExporterConfig.Provider.Namespace).
-		Resource("providerconfigs").
-		Name(config.Spec.ExporterConfig.Provider.Name).
-		DoRaw(context.TODO())
-	if err != nil {
-		return []string{}, err
-	}
-
-	var providerConfig configPackage.ProviderConfig
-	err = json.Unmarshal(jsonData, &providerConfig)
-	if err != nil {
-		return []string{}, err
-	}
-
-	providerConfigSpec := providerConfig.Spec
-
-	log.Logger.Info().Msgf("Found provider %s", config.Spec.ExporterConfig.Provider.Name)
-	resourceStrings := []string{}
-
-	for _, resource := range providerConfigSpec.ResourcesRef {
-		jsonData, err := clientset.RESTClient().
-			Get().
-			AbsPath("/apis/finops.krateo.io/v1").
-			Namespace(resource.Namespace).
-			Resource("resourceconfigs").
-			Name(resource.Name).
-			DoRaw(context.TODO())
-		if err != nil {
-			return []string{}, err
-		}
-		var resourceConfig configPackage.ResourceConfig
-		err = json.Unmarshal(jsonData, &resourceConfig)
-		if err != nil {
-			return []string{}, err
-		}
-		resourceConfigSpec := resourceConfig.Spec
-		resourceStrings = append(resourceStrings, resourceConfigSpec.ResourceFocusName)
-		ResourceList = append(ResourceList, resourceConfigSpec)
-
-		log.Logger.Info().Msgf("Found resource %s", resourceConfigSpec.ResourceFocusName)
-	}
-
-	return resourceStrings, nil
 }
 
 func GetClientSet() (*kubernetes.Clientset, error) {
@@ -211,34 +136,6 @@ func GetClientSet() (*kubernetes.Clientset, error) {
 		return &kubernetes.Clientset{}, err
 	}
 	return clientset, nil
-}
-
-func getMetricsList(clientset *kubernetes.Clientset, resource configPackage.ResourceConfigSpec) ([]configPackage.MetricConfigSpec, error) {
-	result := []configPackage.MetricConfigSpec{}
-	for _, metric := range resource.MetricsRef {
-		jsonData, err := clientset.RESTClient().
-			Get().
-			AbsPath("/apis/finops.krateo.io/v1").
-			Namespace(metric.Namespace).
-			Resource("metricconfigs").
-			Name(metric.Name).
-			DoRaw(context.TODO())
-		if err != nil {
-			return result, err
-		}
-		var metricConfig configPackage.MetricConfig
-		err = json.Unmarshal(jsonData, &metricConfig)
-		if err != nil {
-			return result, err
-		}
-
-		metricConfigSpec := metricConfig.Spec
-
-		result = append(result, metricConfigSpec)
-		log.Logger.Info().Msgf("\tFound metric %s, %s, %s", metricConfigSpec.MetricName, metricConfigSpec.Interval, metricConfigSpec.Timespan)
-	}
-
-	return result, nil
 }
 
 // replaceVariables replaces all variables in the format <variable> with their values

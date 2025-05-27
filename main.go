@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -69,7 +70,12 @@ func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpc
 }
 
 func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, fileName string) {
-	log.Logger.Info().Msgf("Request URL: %s", endpoint.ServerURL)
+	completeURL, err := url.JoinPath(endpoint.ServerURL, config.Spec.ExporterConfig.API.Path)
+	if err != nil {
+		log.Logger.Warn().Err(err).Msgf("Could not create final URL with %s and %s", endpoint.ServerURL, config.Spec.ExporterConfig.API.Path)
+	} else {
+		log.Logger.Info().Msgf("Request URL: %s", completeURL)
+	}
 
 	res := &http.Response{StatusCode: 500}
 	err_call := fmt.Errorf("")
@@ -167,6 +173,7 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 		billedCostIndex, err := utils.GetIndexOf(records, "BilledCost")
 		if err != nil {
 			log.Logger.Warn().Err(err).Msg("error while selecting column BilledCost, retrying...")
+			time.Sleep(5 * time.Second)
 			continue
 		}
 
@@ -182,7 +189,8 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 			if _, ok := prometheusMetrics[strings.Join(record, " ")]; ok {
 				metricValue, err := strconv.ParseFloat(record[billedCostIndex], 64)
 				if err != nil {
-					log.Logger.Warn().Err(err).Msg("error while parsing metric value, continuing...")
+					log.Logger.Warn().Err(err).Msgf("skipping this record for this iteration, error while parsing metric value: %s", record[billedCostIndex])
+					continue
 				}
 				gaugeObj := prometheusMetrics[strings.Join(record, " ")]
 				gaugeObj.gauge.Set(metricValue)
@@ -211,7 +219,8 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 				})
 				metricValue, err := strconv.ParseFloat(records[i][billedCostIndex], 64)
 				if err != nil {
-					log.Logger.Warn().Err(err).Msg("error while parsing metric value, continuing...")
+					log.Logger.Warn().Err(err).Msgf("skipping this record for this iteration, error while parsing metric value: %s", records[i][billedCostIndex])
+					continue
 				}
 				newMetricsRow.Set(metricValue)
 				prometheusMetrics[strings.Join(record, " ")] = recordGaugeCombo{record: record, gauge: newMetricsRow, thisIteration: true}
