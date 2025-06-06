@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"fmt"
@@ -24,7 +25,6 @@ import (
 	finopsdatatypes "github.com/krateoplatformops/finops-data-types/api/v1"
 	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/helpers/kube/endpoints"
 	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/helpers/kube/httpcall"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type recordGaugeCombo struct {
@@ -69,7 +69,7 @@ func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpc
 	return parse, endpoint, nil
 }
 
-func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, fileName string) {
+func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint) []byte {
 	completeURL, err := url.JoinPath(endpoint.ServerURL, config.Spec.ExporterConfig.API.Path)
 	if err != nil {
 		log.Logger.Warn().Err(err).Msgf("Could not create final URL with %s and %s", endpoint.ServerURL, config.Spec.ExporterConfig.API.Path)
@@ -121,52 +121,29 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 	log.Logger.Info().Msg("Trying to parse data as JSON")
 	jsonDataParsed, err := utils.TryParseResponseAsFocusJSON(utils.TrapBOM(data))
 	if err != nil {
-		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", fileName), utils.TrapBOM(data), 0644)
-		if err != nil {
-			log.Logger.Warn().Err(err).Msgf("error while writing data to file %s", fileName)
-		}
+		return utils.TrapBOM(data)
 	} else {
-		err = os.WriteFile(fmt.Sprintf("/temp/%s.dat", fileName), jsonDataParsed, 0644)
-		if err != nil {
-			log.Logger.Warn().Err(err).Msgf("error while writing data to file %s", fileName)
-		}
-
+		return jsonDataParsed
 	}
 }
 
-func getRecordsFromFile(fileName string) [][]string {
-	file, err := os.Open(fmt.Sprintf("/temp/%s.dat", fileName))
-	if err != nil {
-		log.Logger.Warn().Err(err).Msgf("error while opening file %s", fileName)
-		return nil
-	}
-
-	defer file.Close()
-
-	reader := csv.NewReader(file)
+func getRecordsFromFile(data []byte) [][]string {
+	reader := csv.NewReader(bytes.NewReader(data))
 	reader.LazyQuotes = true
 
 	records, err := reader.ReadAll()
 	if err != nil {
-		log.Logger.Warn().Err(err).Msgf("error while reading file %s", fileName)
+		log.Logger.Warn().Err(err).Msg("error while reading file")
 		return nil
 	}
 
 	return records
 }
 
-func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, useConfig bool, registry *prometheus.Registry, prometheusMetrics map[string]recordGaugeCombo) {
+func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, registry *prometheus.Registry, prometheusMetrics map[string]recordGaugeCombo) {
 	for {
-		fileName := ""
-		if config.Spec.ExporterConfig.Provider.Name != "" {
-			fileName = config.Spec.ExporterConfig.Provider.Name
-		} else {
-			fileName = "download"
-		}
-		if useConfig {
-			makeAPIRequest(config, endpoint, fileName)
-		}
-		records := getRecordsFromFile(fileName)
+		data := makeAPIRequest(config, endpoint)
+		records := getRecordsFromFile(data)
 
 		// Obtain various indexes
 		// BilledCost for value of metric
@@ -245,24 +222,19 @@ func main() {
 	var err error
 	config := finopsdatatypes.ExporterScraperConfig{}
 	endpoint := &httpcall.Endpoint{}
-	useConfig := true
 	if len(os.Args) <= 1 {
 		config, endpoint, err = ParseConfigFile("/config/config.yaml")
 		if err != nil {
 			log.Logger.Error().Err(err).Msg("error while parsing configuration, exiting")
 			return
 		}
-	} else {
-		useConfig = false
-		config.Spec.ExporterConfig.Provider.Name = os.Args[1]
-		config.Spec.ExporterConfig.PollingInterval = metav1.Duration{Duration: 1 * time.Hour}
 	}
 
 	log.Debug().Msgf("Polling interval set to %s", config.Spec.ExporterConfig.PollingInterval.Duration.String())
 
 	registry := prometheus.NewRegistry()
 
-	go updatedMetrics(config, endpoint, useConfig, registry, map[string]recordGaugeCombo{})
+	go updatedMetrics(config, endpoint, registry, map[string]recordGaugeCombo{})
 
 	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 
