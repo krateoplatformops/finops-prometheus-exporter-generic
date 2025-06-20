@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -70,13 +69,6 @@ func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpc
 }
 
 func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint) []byte {
-	completeURL, err := url.JoinPath(endpoint.ServerURL, config.Spec.ExporterConfig.API.Path)
-	if err != nil {
-		log.Logger.Warn().Err(err).Msgf("Could not create final URL with %s and %s", endpoint.ServerURL, config.Spec.ExporterConfig.API.Path)
-	} else {
-		log.Logger.Info().Msgf("Request URL: %s", completeURL)
-	}
-
 	res := &http.Response{StatusCode: 500}
 	err_call := fmt.Errorf("")
 
@@ -91,10 +83,12 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 			Endpoint: endpoint,
 		})
 
-		if err == nil && res.StatusCode != 200 {
+		if err_call == nil && res.StatusCode != 200 {
 			log.Warn().Msgf("Received status code %d", res.StatusCode)
+			bodyData, _ := io.ReadAll(res.Body)
+			log.Warn().Msgf("Body %s", string(bodyData))
 		} else {
-			log.Logger.Warn().Err(err).Msg("error occurred while making API call")
+			log.Logger.Warn().Err(err_call).Msg("error occurred while making API call")
 		}
 		log.Logger.Warn().Msgf("Retrying connection in 5s...")
 		time.Sleep(5 * time.Second)
@@ -140,8 +134,14 @@ func getRecordsFromFile(data []byte) [][]string {
 	return records
 }
 
-func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint, registry *prometheus.Registry, prometheusMetrics map[string]recordGaugeCombo) {
+func updatedMetrics(registry *prometheus.Registry, prometheusMetrics map[string]recordGaugeCombo) {
 	for {
+		config, endpoint, err := ParseConfigFile("/config/config.yaml")
+		if err != nil {
+			log.Logger.Error().Err(err).Msg("error while parsing configuration, trying again in 5s...")
+			time.Sleep(5 * time.Second)
+			continue
+		}
 		data := makeAPIRequest(config, endpoint)
 		records := getRecordsFromFile(data)
 
@@ -214,27 +214,14 @@ func updatedMetrics(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 				prometheusMetrics[key] = gaugeObj
 			}
 		}
+		log.Debug().Msgf("Polling interval set to %s, starting sleep...", config.Spec.ExporterConfig.PollingInterval.Duration.String())
 		time.Sleep(config.Spec.ExporterConfig.PollingInterval.Duration)
 	}
 }
 
 func main() {
-	var err error
-	config := finopsdatatypes.ExporterScraperConfig{}
-	endpoint := &httpcall.Endpoint{}
-	if len(os.Args) <= 1 {
-		config, endpoint, err = ParseConfigFile("/config/config.yaml")
-		if err != nil {
-			log.Logger.Error().Err(err).Msg("error while parsing configuration, exiting")
-			return
-		}
-	}
-
-	log.Debug().Msgf("Polling interval set to %s", config.Spec.ExporterConfig.PollingInterval.Duration.String())
-
 	registry := prometheus.NewRegistry()
-
-	go updatedMetrics(config, endpoint, registry, map[string]recordGaugeCombo{})
+	go updatedMetrics(registry, map[string]recordGaugeCombo{})
 
 	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 

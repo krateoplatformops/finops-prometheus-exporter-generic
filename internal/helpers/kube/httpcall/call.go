@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+
 	"mime"
 	"net/http"
 	"net/url"
 	"strings"
 
 	finopsdatatypes "github.com/krateoplatformops/finops-data-types/api/v1"
+	"github.com/rs/zerolog/log"
 )
 
 type Options struct {
@@ -36,6 +38,7 @@ func Do(ctx context.Context, client *http.Client, opts Options) (*http.Response,
 		body = strings.NewReader(opts.API.Payload)
 	}
 
+	log.Info().Msgf("Request URL: %s", u.String())
 	req, err := http.NewRequestWithContext(ctx, verb, u.String(), body)
 	if err != nil {
 		return nil, err
