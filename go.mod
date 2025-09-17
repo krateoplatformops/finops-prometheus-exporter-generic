@@ -1,8 +1,8 @@
 module github.com/krateoplatformops/finops-prometheus-exporter-generic
 
-go 1.23.3
+go 1.24.0
 
-toolchain go1.23.6
+toolchain go1.24.2
 
 require (
 	github.com/prometheus/client_golang v1.20.2
@@ -40,7 +40,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.20.1 // indirect
 	github.com/onsi/gomega v1.34.2 // indirect
 	golang.org/x/net v0.38.0 // indirect
-	golang.org/x/oauth2 v0.22.0 // indirect
+	golang.org/x/oauth2 v0.31.0 // indirect
 	golang.org/x/term v0.30.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.6.0 // indirect
