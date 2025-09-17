@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
-	"fmt"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -22,6 +22,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	finopsdatatypes "github.com/krateoplatformops/finops-data-types/api/v1"
+	configmetrics "github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/config"
 	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/helpers/kube/endpoints"
 	"github.com/krateoplatformops/finops-prometheus-exporter-generic/internal/helpers/kube/httpcall"
 )
@@ -70,9 +71,11 @@ func ParseConfigFile(file string) (finopsdatatypes.ExporterScraperConfig, *httpc
 
 func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *httpcall.Endpoint) []byte {
 	res := &http.Response{StatusCode: 500}
-	err_call := fmt.Errorf("")
+	var err_call error
+	firstIteration := true
+	for ok := true; ok; ok = (firstIteration || err_call != nil || res.StatusCode != 200) {
+		firstIteration = false
 
-	for ok := true; ok; ok = (err_call != nil || res.StatusCode != 200) {
 		httpClient, err := httpcall.HTTPClientForEndpoint(endpoint)
 		if err != nil {
 			log.Logger.Warn().Err(err).Msg("error while creating HTTP client")
@@ -121,13 +124,48 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 	}
 }
 
-func getRecordsFromFile(data []byte) [][]string {
+func getFOCUSRecordsFromFile(data []byte) [][]string {
 	reader := csv.NewReader(bytes.NewReader(data))
 	reader.LazyQuotes = true
 
 	records, err := reader.ReadAll()
 	if err != nil {
 		log.Logger.Warn().Err(err).Msg("error while reading file")
+		return nil
+	}
+
+	return records
+}
+
+func getUsageRecordsFromFile(byteData []byte, config finopsdatatypes.ExporterScraperConfig) [][]string {
+	data := configmetrics.Metrics{}
+	err := json.Unmarshal(byteData, &data)
+	if err != nil {
+		log.Logger.Error().Err(err).Msg("error decoding response")
+		if e, ok := err.(*json.SyntaxError); ok {
+			log.Logger.Error().Msgf("syntax error at byte offset %d", e.Offset)
+		}
+		log.Logger.Info().Msgf("response: %q", byteData)
+		log.Logger.Error().Err(err).Msg("error while reading file")
+		return nil
+	}
+
+	stringCSV := "ResourceId,metricName,timestamp,average,unit\n"
+	for _, value := range data.Value {
+		for _, timeseries := range value.Timeseries {
+			for _, metric := range timeseries.Data {
+				stringCSV += config.Spec.ExporterConfig.AdditionalVariables["ResourceId"] + "," + value.Name.Value + "," + metric.Timestamp.Format(time.RFC3339) + "," + metric.Average.AsDec().String() + "," + value.Unit + "\n"
+			}
+		}
+	}
+
+	stringCSV = strings.TrimSuffix(stringCSV, "\n")
+
+	reader := csv.NewReader(strings.NewReader(stringCSV))
+
+	records, err := reader.ReadAll()
+	if err != nil {
+		log.Logger.Error().Err(err).Msg("error while reading file")
 		return nil
 	}
 
@@ -143,16 +181,30 @@ func updatedMetrics(registry *prometheus.Registry, prometheusMetrics map[string]
 			continue
 		}
 		data := makeAPIRequest(config, endpoint)
-		records := getRecordsFromFile(data)
-
-		// Obtain various indexes
-		// BilledCost for value of metric
-		billedCostIndex, err := utils.GetIndexOf(records, "BilledCost")
-		if err != nil {
-			log.Logger.Warn().Err(err).Msg("error while selecting column BilledCost, retrying...")
+		var records [][]string
+		if strings.ToLower(config.Spec.ExporterConfig.MetricType) == "cost" {
+			records = getFOCUSRecordsFromFile(data)
+		} else if strings.ToLower(config.Spec.ExporterConfig.MetricType) == "resource" {
+			records = getUsageRecordsFromFile(data, config)
+		} else {
+			log.Logger.Error().Err(err).Msgf("Unknow metric type: %s, trying again in 5s...", config.Spec.ExporterConfig.MetricType)
 			time.Sleep(5 * time.Second)
 			continue
 		}
+
+		// Obtain various indexes
+		// BilledCost for value of metric
+		valueIndex := -1
+		if strings.ToLower(config.Spec.ExporterConfig.MetricType) == "cost" {
+			valueIndex, err = utils.GetIndexOf(records, "BilledCost")
+			if err != nil {
+				log.Logger.Warn().Err(err).Msg("error while selecting column BilledCost, retrying...")
+				time.Sleep(5 * time.Second)
+				continue
+			}
+		} else if strings.ToLower(config.Spec.ExporterConfig.MetricType) == "resource" {
+			valueIndex = 3
+		} // There is no else here, because we cannot arrive here if we get the else condition from the same test above
 
 		notFound := true
 		log.Info().Msgf("Analyzing %d records...", len(records))
@@ -164,9 +216,9 @@ func updatedMetrics(registry *prometheus.Registry, prometheusMetrics map[string]
 
 			notFound = true
 			if _, ok := prometheusMetrics[strings.Join(record, " ")]; ok {
-				metricValue, err := strconv.ParseFloat(record[billedCostIndex], 64)
+				metricValue, err := strconv.ParseFloat(record[valueIndex], 64)
 				if err != nil {
-					log.Logger.Warn().Err(err).Msgf("skipping this record for this iteration, error while parsing metric value: %s", record[billedCostIndex])
+					log.Logger.Warn().Err(err).Msgf("skipping this record for this iteration, error while parsing metric value: %s", record[valueIndex])
 					continue
 				}
 				gaugeObj := prometheusMetrics[strings.Join(record, " ")]
@@ -174,12 +226,12 @@ func updatedMetrics(registry *prometheus.Registry, prometheusMetrics map[string]
 				gaugeObj.thisIteration = true
 				prometheusMetrics[strings.Join(record, " ")] = gaugeObj
 				notFound = false
-
 			}
+
 			if notFound {
 				labels := prometheus.Labels{}
 				for j, value := range record {
-					if strings.Contains(records[0][j], "x_") {
+					if strings.ToLower(config.Spec.ExporterConfig.MetricType) == "cost" && strings.Contains(records[0][j], "x_") {
 						continue
 					}
 					if !strings.Contains(records[0][j], "Tags") {
@@ -190,13 +242,19 @@ func updatedMetrics(registry *prometheus.Registry, prometheusMetrics map[string]
 					}
 				}
 
+				name := ""
+				if strings.ToLower(config.Spec.ExporterConfig.MetricType) == "cost" {
+					name = "billed_cost"
+				} else if strings.ToLower(config.Spec.ExporterConfig.MetricType) == "resource" {
+					name = strings.ReplaceAll(strings.ToLower(labels[records[0][1]]), " ", "_")
+				}
 				newMetricsRow := promauto.NewGauge(prometheus.GaugeOpts{
-					Name:        "billed_cost",
+					Name:        name,
 					ConstLabels: labels,
 				})
-				metricValue, err := strconv.ParseFloat(records[i][billedCostIndex], 64)
+				metricValue, err := strconv.ParseFloat(records[i][valueIndex], 64)
 				if err != nil {
-					log.Logger.Warn().Err(err).Msgf("skipping this record for this iteration, error while parsing metric value: %s", records[i][billedCostIndex])
+					log.Logger.Warn().Err(err).Msgf("skipping this record for this iteration, error while parsing metric value: %s", records[i][valueIndex])
 					continue
 				}
 				newMetricsRow.Set(metricValue)
