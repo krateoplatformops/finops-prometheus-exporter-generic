@@ -115,13 +115,22 @@ func makeAPIRequest(config finopsdatatypes.ExporterScraperConfig, endpoint *http
 		log.Logger.Warn().Err(err).Msg("an error has occured while reading response body")
 	}
 
-	log.Logger.Info().Msg("Trying to parse data as JSON")
-	jsonDataParsed, err := utils.TryParseResponseAsFocusJSON(utils.TrapBOM(data))
-	if err != nil {
-		return utils.TrapBOM(data)
-	} else {
+	// "Content-Encoding: gzip" is automatically handlded by go's HTTP transport
+	log.Logger.Debug().Msgf("Content-Type: %s", strings.ToLower(res.Header.Get("Content-Type")))
+	log.Logger.Debug().Msgf("Content-Length: %s", strings.ToLower(res.Header.Get("Content-Length")))
+
+	if strings.ToLower(res.Header.Get("Content-Type")) == "application/json" {
+		log.Logger.Info().Msg("Detected json content-type")
+		jsonDataParsed, err := utils.TryParseResponseAsFocusJSON(utils.TrapBOM(data))
+		if err != nil {
+			log.Logger.Warn().Err(err).Msg("an error has occured while parsing json data")
+		}
 		return jsonDataParsed
+	} else if strings.ToLower(res.Header.Get("Content-Type")) == "text/csv" {
+		return utils.TrapBOM(data)
 	}
+	log.Logger.Error().Msgf("Content-Type not supported: %s", strings.ToLower(res.Header.Get("Content-Type")))
+	return nil
 }
 
 func getFOCUSRecordsFromFile(data []byte) [][]string {
